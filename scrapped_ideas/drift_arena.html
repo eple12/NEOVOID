@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>NEON DRIFT</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: #04040a;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Courier New', monospace; color: #e8f6ff;
+    overflow: hidden; user-select: none; touch-action: none;
+  }
+  #stage {
+    position: relative;
+    width: min(96vw, 1000px);
+    aspect-ratio: 16 / 9;
+    box-shadow: 0 0 0 3px #14142a, 0 0 60px rgba(255,0,150,0.25);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  canvas { display: block; width: 100%; height: 100%; background: #07070f; }
+  #scan {
+    position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,0.10) 3px, rgba(0,0,0,0.10) 4px);
+    mix-blend-mode: multiply; z-index: 5;
+  }
+  #vig {
+    position: absolute; inset: 0; pointer-events: none; z-index: 4;
+    background: radial-gradient(ellipse at 50% 42%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.55) 100%);
+  }
+  .hud { position: absolute; z-index: 6; pointer-events: none; text-shadow: 0 0 6px #000, 0 0 3px #000; }
+  #spd { left: clamp(8px,2vw,20px); bottom: clamp(8px,2vw,18px); }
+  #spd .n { font-size: clamp(26px,6vw,58px); font-weight: bold; color: #fff; letter-spacing: 1px; line-height: .9; }
+  #spd .u { font-size: clamp(9px,1.6vw,14px); color: #6cc6ff; letter-spacing: 3px; }
+  #score { right: clamp(8px,2vw,20px); top: clamp(8px,2vw,16px); text-align: right; }
+  #score .lbl { font-size: clamp(8px,1.4vw,12px); color: #7db8c9; letter-spacing: 2px; }
+  #score .n { font-size: clamp(20px,4.6vw,40px); font-weight: bold; color: #ffe066; letter-spacing: 1px; }
+  #driftbox {
+    position: absolute; z-index: 6; top: 30%; left: 50%; transform: translate(-50%,-50%);
+    text-align: center; pointer-events: none; opacity: 0; transition: opacity .12s;
+  }
+  #driftbox.on { opacity: 1; }
+  #driftbox .amt { font-size: clamp(24px,6vw,54px); font-weight: bold; color: #ff2d95;
+    text-shadow: 0 0 14px #ff2d95, 0 0 4px #000; letter-spacing: 1px; }
+  #driftbox .cmb { font-size: clamp(11px,2.2vw,20px); color: #00e5ff; letter-spacing: 3px;
+    text-shadow: 0 0 8px #00e5ff, 0 0 3px #000; }
+  #banner {
+    position: absolute; z-index: 7; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; gap: 14px;
+    background: radial-gradient(ellipse at 50% 45%, rgba(20,4,30,.55), rgba(4,4,10,.82));
+    transition: opacity .35s;
+  }
+  #banner.hide { opacity: 0; pointer-events: none; }
+  #banner h1 {
+    margin: 0; font-size: clamp(30px,8vw,74px); letter-spacing: 4px; font-weight: 900;
+    color: #fff; text-shadow: 0 0 18px #ff2d95, 0 0 40px #ff2d95;
+  }
+  #banner .sub { font-size: clamp(11px,2.4vw,17px); color: #8fe6ff; letter-spacing: 2px; line-height: 1.8; }
+  #banner .key { color: #ffe066; }
+  #banner button {
+    margin-top: 6px; font-family: inherit; font-size: clamp(13px,2.6vw,20px); font-weight: bold;
+    letter-spacing: 3px; color: #04040a; background: #00e5ff; border: none; cursor: pointer;
+    padding: 12px 34px; border-radius: 3px; box-shadow: 0 0 24px rgba(0,229,255,.6);
+  }
+  #banner button:active { transform: translateY(1px); }
+  /* touch */
+  #touch { position: absolute; inset: 0; z-index: 6; display: none; }
+  #touch.on { display: block; }
+  .tbtn {
+    position: absolute; bottom: clamp(10px,3vw,26px); width: clamp(64px,15vw,104px); height: clamp(64px,15vw,104px);
+    border-radius: 50%; border: 2px solid rgba(255,255,255,.35); background: rgba(255,255,255,.06);
+    display: flex; align-items: center; justify-content: center; font-size: clamp(20px,5vw,34px);
+    color: #cfeaff; pointer-events: auto; backdrop-filter: blur(2px);
+  }
+  .tbtn:active { background: rgba(0,229,255,.35); }
+  #tL { left: clamp(8px,2vw,18px); }
+  #tR { left: clamp(84px,19vw,140px); }
+  #tGas { right: clamp(8px,2vw,18px); background: rgba(0,255,120,.10); border-color: rgba(0,255,120,.4);}
+  #tHB  { right: clamp(84px,19vw,140px); background: rgba(255,45,149,.12); border-color: rgba(255,45,149,.5);}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c"></canvas>
+  <div id="vig"></div>
+  <div id="scan"></div>
+
+  <div class="hud" id="spd"><div class="n">0</div><div class="u">KM/H</div></div>
+  <div class="hud" id="score"><div class="lbl">DRIFT SCORE</div><div class="n">0</div></div>
+  <div id="driftbox"><div class="amt">+0</div><div class="cmb">x1</div></div>
+
+  <div id="touch">
+    <div class="tbtn" id="tL">◀</div>
+    <div class="tbtn" id="tR">▶</div>
+    <div class="tbtn" id="tHB">✋</div>
+    <div class="tbtn" id="tGas">▲</div>
+  </div>
+
+  <div id="banner">
+    <h1>NEON DRIFT</h1>
+    <div class="sub">
+      <span class="key">↑</span> 가속 &nbsp; <span class="key">↓</span> 브레이크 · 후진<br>
+      <span class="key">← →</span> 조향 &nbsp; <span class="key">SPACE</span> 핸드브레이크<br>
+      게이트를 <b>드리프트로</b> 통과할수록 콤보가 커진다
+    </div>
+    <button id="startBtn">START</button>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0, focal = 0, DPR = 1;
+
+function resize() {
+  const r = cv.getBoundingClientRect();
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = Math.round(r.width); H = Math.round(r.height);
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  focal = H * 1.05; // field of view
+}
+window.addEventListener('resize', resize);
+
+/* ---------- 3D camera / projection ---------- */
+const cam = { x: 0, y: 7.2, z: -12, yaw: 0, pitch: -0.34 };
+// view space: +z into screen, +x right, +y up
+function toView(px, py, pz) {
+  const dx = px - cam.x, dy = py - cam.y, dz = pz - cam.z;
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  // rotate by -yaw around Y; forward = (sin,cos)
+  let vx = dx * cy - dz * sy;
+  let vz = dx * sy + dz * cy;
+  let vy = dy;
+  // pitch tilt (look down)
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const vy2 = vy * cp - vz * sp;
+  const vz2 = vy * sp + vz * cp;
+  return { x: vx, y: vy2, z: vz2 };
+}
+const NEAR = 0.6;
+function project(v) {
+  const s = focal / v.z;
+  return { x: W / 2 + v.x * s, y: H / 2 - v.y * s, s };
+}
+// draw ground/air line with near-plane clip
+function line3d(a, b, style, wdt) {
+  let A = toView(a[0], a[1], a[2]), B = toView(b[0], b[1], b[2]);
+  if (A.z < NEAR && B.z < NEAR) return;
+  if (A.z < NEAR) { const t = (NEAR - A.z) / (B.z - A.z); A = lerpV(A, B, t); }
+  else if (B.z < NEAR) { const t = (NEAR - B.z) / (A.z - B.z); B = lerpV(B, A, t); }
+  const pa = project(A), pb = project(B);
+  ctx.strokeStyle = style; ctx.lineWidth = wdt || 1;
+  ctx.beginPath(); ctx.moveTo(pa.x, pa.y); ctx.lineTo(pb.x, pb.y); ctx.stroke();
+}
+function lerpV(a, b, t) { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }; }
+
+// fill a 3D quad (all corners assumed in front-ish); returns false if fully behind
+function quad3d(pts, fill, stroke) {
+  const vs = pts.map(p => toView(p[0], p[1], p[2]));
+  if (vs.every(v => v.z < NEAR)) return false;
+  const ps = vs.map(v => project(v));
+  ctx.beginPath();
+  ctx.moveTo(ps[0].x, ps[0].y);
+  for (let i = 1; i < ps.length; i++) ctx.lineTo(ps[i].x, ps[i].y);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.4; ctx.stroke(); }
+  return true;
+}
+
+/* ---------- input ---------- */
+const keys = {};
+addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+  if (e.code === 'Enter' && !running) start();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+// touch
+const touch = { L:false, R:false, gas:false, hb:false };
+function bindT(id, k) {
+  const el = document.getElementById(id);
+  const on = e => { e.preventDefault(); touch[k] = true; };
+  const off = e => { e.preventDefault(); touch[k] = false; };
+  el.addEventListener('touchstart', on, {passive:false});
+  el.addEventListener('touchend', off, {passive:false});
+  el.addEventListener('touchcancel', off, {passive:false});
+  el.addEventListener('mousedown', on); el.addEventListener('mouseup', off); el.addEventListener('mouseleave', off);
+}
+bindT('tL','L'); bindT('tR','R'); bindT('tGas','gas'); bindT('tHB','hb');
+if ('ontouchstart' in window) document.getElementById('touch').classList.add('on');
+
+/* ---------- car physics ---------- */
+const car = {
+  x: 0, z: 0, angle: 0,       // heading; forward = (sin,cos)
+  vx: 0, vz: 0,               // world velocity
+  steer: 0,                   // smoothed steering -1..1
+  slip: 0, speed: 0, drifting: false, engineRot: 0
+};
+const MAX_SPEED = 68;
+const ACCEL = 46;
+const REVERSE = 26;
+
+function resetCar() {
+  car.x = 0; car.z = 0; car.angle = 0; car.vx = 0; car.vz = 0;
+  car.steer = 0; car.slip = 0; car.speed = 0; car.drifting = false;
+}
+
+function stepCar(dt) {
+  // ---- input axes ----
+  const left = keys.ArrowLeft || keys.KeyA || touch.L;
+  const right = keys.ArrowRight || keys.KeyD || touch.R;
+  const gas = keys.ArrowUp || keys.KeyW || touch.gas;
+  const brake = keys.ArrowDown || keys.KeyS;
+  const hb = keys.Space || touch.hb;
+
+  let steerTarget = (right ? 1 : 0) - (left ? 1 : 0);
+  // steering sharpens at lower speed, softens at high speed for control
+  const steerRate = 7.5;
+  car.steer += (steerTarget - car.steer) * Math.min(1, steerRate * dt);
+
+  // local frame
+  const fx = Math.sin(car.angle), fz = Math.cos(car.angle);
+  const rx = Math.cos(car.angle), rz = -Math.sin(car.angle);
+  let vLong = car.vx * fx + car.vz * fz;
+  let vLat  = car.vx * rx + car.vz * rz;
+
+  const speed = Math.hypot(car.vx, car.vz);
+  const speedN = Math.min(1, speed / 26);   // 0..1 ramp for steering authority
+
+  // ---- engine ----
+  if (gas) vLong += ACCEL * dt;
+  else if (brake) {
+    if (vLong > 1) vLong -= (ACCEL * 1.3) * dt;      // braking
+    else vLong -= REVERSE * dt;                       // reverse
+  } else {
+    vLong *= (1 - 1.1 * dt);                           // engine drag
+  }
+  vLong = Math.max(-22, Math.min(MAX_SPEED, vLong));
+
+  // ---- steering -> yaw ----
+  // more rotation while sliding = satisfying; direction from speed sign
+  const dir = vLong >= 0 ? 1 : -1;
+  const baseTurn = 2.55;
+  let turn = car.steer * baseTurn * speedN * dir;
+  // handbrake / drift lets the tail swing more
+  const driftBoost = (hb ? 1.55 : 1) * (Math.abs(vLat) > 6 ? 1.25 : 1);
+  car.angle += turn * driftBoost * dt;
+
+  // ---- lateral grip (the heart of the drift feel) ----
+  // grip high normally; drops with handbrake, hard steering at speed, and once tail breaks away
+  let grip = 9.5;
+  if (hb) grip = 1.4;
+  else {
+    const load = Math.abs(car.steer) * speedN;
+    grip = 9.5 - load * 6.5;                 // hard cornering reduces grip
+    if (Math.abs(vLat) > 10) grip *= 0.6;    // sustained slide stays loose
+  }
+  grip = Math.max(1.2, grip);
+  vLat *= Math.max(0, 1 - grip * dt);
+
+  // scrub: sliding sideways bleeds a little forward speed (feels weighty)
+  const scrub = Math.min(1, Math.abs(vLat) * 0.010);
+  vLong *= (1 - scrub * 1.4 * dt);
+
+  // recompose
+  car.vx = fx * vLong + rx * vLat;
+  car.vz = fz * vLong + rz * vLat;
+
+  // integrate
+  car.x += car.vx * dt;
+  car.z += car.vz * dt;
+
+  // arena bounds (soft wall bounce)
+  const B = ARENA - 2;
+  if (Math.abs(car.x) > B) { car.x = Math.sign(car.x) * B; car.vx *= -0.35; }
+  if (Math.abs(car.z) > B) { car.z = Math.sign(car.z) * B; car.vz *= -0.35; }
+
+  car.speed = Math.hypot(car.vx, car.vz);
+  car.slip = Math.abs(car.speed) > 3 ? Math.atan2(vLat, Math.abs(vLong)) : 0;
+  car.drifting = car.speed > 12 && Math.abs(car.slip) > 0.22;
+  car.engineRot += (0.4 + car.speed * 0.02) * dt;
+  car._vLat = vLat; car._vLong = vLong;
+}
+
+/* ---------- world: arena + gates + decals + smoke ---------- */
+const ARENA = 120;
+let gates = [];
+let skids = [];    // {x,z,ang} ground tire marks
+let smoke = [];    // {x,y,z,r,life,max}
+const MAXSKID = 900;
+
+function spawnGates() {
+  gates = [];
+  const N = 7;
+  let a = 0, R = 62;
+  let px = 0, pz = 34;
+  for (let i = 0; i < N; i++) {
+    a += 0.7 + Math.random() * 1.1;
+    const gx = Math.cos(a) * (R * (0.5 + Math.random()*0.5));
+    const gz = Math.sin(a) * (R * (0.5 + Math.random()*0.5));
+    // gate faces roughly toward previous gate direction
+    const dir = Math.atan2(gx - px, gz - pz);
+    gates.push({ x: gx, z: gz, ang: dir + Math.PI/2, passed: false, w: 7 });
+    px = gx; pz = gz;
+  }
+  gates.forEach(g => g.passed = false);
+  activeGate = 0;
+}
+let activeGate = 0;
+
+function checkGate() {
+  if (activeGate >= gates.length) { spawnGates(); return; }
+  const g = gates[activeGate];
+  const dx = car.x - g.x, dz = car.z - g.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < g.w) {
+    // scored — bonus scaled by how sideways you were
+    const driftMul = 1 + Math.min(2.5, Math.abs(car.slip) * 3);
+    addScore(Math.round(120 * driftMul), true);
+    g.passed = true;
+    activeGate++;
+    if (activeGate >= gates.length) setTimeout(spawnGates, 400);
+  }
+}
+
+/* ---------- drift scoring / combo ---------- */
+let score = 0, combo = 1, driftAccrue = 0, driftTimer = 0, comboTimer = 0;
+const dbox = document.getElementById('driftbox');
+const dboxAmt = dbox.querySelector('.amt');
+const dboxCmb = dbox.querySelector('.cmb');
+const scoreN = document.querySelector('#score .n');
+const spdN = document.querySelector('#spd .n');
+
+function addScore(v, gate) {
+  score += v * (gate ? 1 : 1);
+  scoreN.textContent = score.toLocaleString();
+  if (gate) { comboTimer = 2.6; combo = Math.min(9, combo + 1); flashCombo(); }
+}
+function flashCombo() {
+  scoreN.animate([{transform:'scale(1.4)',color:'#fff'},{transform:'scale(1)',color:'#ffe066'}], {duration:280});
+}
+
+function stepScore(dt) {
+  if (car.drifting) {
+    const rate = car.speed * Math.abs(car.slip) * 2.2;
+    driftAccrue += rate * dt * combo;
+    driftTimer = 0.4;
+    dbox.classList.add('on');
+    dboxAmt.textContent = '+' + Math.round(driftAccrue);
+    dboxCmb.textContent = 'x' + combo;
+  } else {
+    driftTimer -= dt;
+    if (driftTimer <= 0 && driftAccrue > 0) {
+      // bank it
+      score += Math.round(driftAccrue);
+      scoreN.textContent = score.toLocaleString();
+      driftAccrue = 0;
+      dbox.classList.remove('on');
+      flashCombo();
+    }
+  }
+  comboTimer -= dt;
+  if (comboTimer <= 0) combo = 1;
+}
+
+/* ---------- decals + particles ---------- */
+function emitDrift(dt) {
+  if (!car.drifting && !(keys.Space||touch.hb && car.speed>6)) return;
+  const intensity = Math.min(1, Math.abs(car._vLat) / 16);
+  if (intensity < 0.15) return;
+  // rear tire positions
+  const bx = car.x - Math.sin(car.angle) * 2.0;
+  const bz = car.z - Math.cos(car.angle) * 2.0;
+  const off = Math.cos(car.angle) * 1.0, offz = -Math.sin(car.angle) * 1.0;
+  for (const s of [-1, 1]) {
+    skids.push({ x: bx + off*s*0.9, z: bz + offz*s*0.9, ang: car.angle, a: 0.5 * intensity });
+  }
+  if (skids.length > MAXSKID) skids.splice(0, skids.length - MAXSKID);
+  // smoke
+  if (Math.random() < intensity) {
+    smoke.push({ x: bx + (Math.random()-.5)*2, y: 0.3, z: bz + (Math.random()-.5)*2,
+      r: 0.8, life: 0, max: 0.7 + Math.random()*0.5, vy: 2 + Math.random()*2 });
+  }
+}
+function stepSmoke(dt) {
+  for (let i = smoke.length-1; i>=0; i--) {
+    const p = smoke[i];
+    p.life += dt; p.y += p.vy*dt; p.r += 4*dt;
+    if (p.life > p.max) smoke.splice(i,1);
+  }
+}
+
+/* ---------- rendering ---------- */
+function drawGround() {
+  // gradient sky/floor already via canvas bg; draw neon grid
+  const step = 8, range = 96;
+  const cx = Math.round(car.x / step) * step;
+  const cz = Math.round(car.z / step) * step;
+  ctx.lineWidth = 1;
+  for (let gx = -range; gx <= range; gx += step) {
+    const x = cx + gx;
+    if (Math.abs(x) > ARENA) continue;
+    line3d([x, 0, cz - range], [x, 0, cz + range], 'rgba(90,40,140,0.35)', 1);
+  }
+  for (let gz = -range; gz <= range; gz += step) {
+    const z = cz + gz;
+    if (Math.abs(z) > ARENA) continue;
+    line3d([cx - range, 0, z], [cx + range, 0, z], 'rgba(90,40,140,0.35)', 1);
+  }
+  // arena border
+  const b = ARENA;
+  ctx.lineWidth = 2;
+  line3d([-b,0,-b],[ b,0,-b],'#ff2d95',3); line3d([ b,0,-b],[ b,0, b],'#ff2d95',3);
+  line3d([ b,0, b],[-b,0, b],'#ff2d95',3); line3d([-b,0, b],[-b,0,-b],'#ff2d95',3);
+}
+
+function drawSkids() {
+  // draw as short ground segments oriented with car heading
+  ctx.lineCap = 'round';
+  for (const s of skids) {
+    const dx = Math.sin(s.ang) * 0.9, dz = Math.cos(s.ang) * 0.9;
+    // quick cull: behind camera-ish by distance
+    const dd = (s.x-cam.x)*(s.x-cam.x) + (s.z-cam.z)*(s.z-cam.z);
+    if (dd > 140*140) continue;
+    line3d([s.x-dx, 0.02, s.z-dz], [s.x+dx, 0.02, s.z+dz], 'rgba(10,8,14,'+s.a+')', 3.2);
+  }
+  ctx.lineCap = 'butt';
+}
+
+function drawGates() {
+  for (let i = 0; i < gates.length; i++) {
+    const g = gates[i];
+    const isNext = i === activeGate;
+    const col = g.passed ? 'rgba(60,70,90,0.5)' : (isNext ? '#00e5ff' : 'rgba(0,160,180,0.55)');
+    const hw = g.w, dx = Math.cos(g.ang) * hw, dz = -Math.sin(g.ang) * hw;
+    const hgt = 7;
+    const lx = g.x - dx, lz = g.z - dz, rx2 = g.x + dx, rz2 = g.z + dz;
+    // two posts + top bar
+    ctx.lineWidth = isNext ? 4 : 2;
+    line3d([lx,0,lz],[lx,hgt,lz], col, isNext?5:2.5);
+    line3d([rx2,0,rz2],[rx2,hgt,rz2], col, isNext?5:2.5);
+    line3d([lx,hgt,lz],[rx2,hgt,rz2], col, isNext?5:2.5);
+    if (isNext) {
+      // glowing gate plane
+      quad3d([[lx,0.1,lz],[rx2,0.1,rz2],[rx2,hgt,rz2],[lx,hgt,lz]], 'rgba(0,229,255,0.10)', null);
+      // ground marker ring
+      line3d([lx,0.05,lz],[rx2,0.05,rz2], 'rgba(0,229,255,0.5)', 2);
+    }
+  }
+}
+
+function drawSmoke() {
+  // sort back-to-front by view z
+  const arr = smoke.map(p => ({ p, v: toView(p.x, p.y, p.z) })).filter(o => o.v.z > NEAR);
+  arr.sort((a,b) => b.v.z - a.v.z);
+  for (const o of arr) {
+    const pr = project(o.v);
+    const rad = o.p.r * pr.s;
+    const a = (1 - o.p.life / o.p.max) * 0.28;
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(210,180,235,' + a.toFixed(3) + ')';
+    ctx.arc(pr.x, pr.y, Math.max(1, rad), 0, 7);
+    ctx.fill();
+  }
+}
+
+function drawCar() {
+  // low-poly car built from box + cabin, defined in local space then rotated to world
+  const a = car.angle, s = Math.sin(a), co = Math.cos(a);
+  function P(lx, ly, lz) { // local x(right), y(up), z(forward) -> world
+    return [ car.x + lx*co + lz*s, ly, car.z - lx*s + lz*co ];
+  }
+  // body corners
+  const bw = 1.5, bl = 3.0, bh = 0.55, base = 0.35, ch = 1.1;
+  // bottom (4) top (4)
+  const b = [P(-bw,base,-bl),P(bw,base,-bl),P(bw,base,bl),P(-bw,base,bl)];
+  const t = [P(-bw,base+bh,-bl),P(bw,base+bh,-bl),P(bw,base+bh,bl),P(-bw,base+bh,bl)];
+  // shading by heading vs camera-ish
+  const lean = Math.max(0, Math.min(1, -car.slip*1.2 + .5));
+  const bodyCol = car.drifting ? '#ff2d95' : '#20e0d6';
+  const dark = car.drifting ? '#a01560' : '#0e7a75';
+  // draw faces roughly back-to-front (simple painter: sides, then top)
+  // shadow on ground
+  quad3d([P(-bw-.3,0.02,-bl-.3),P(bw+.3,0.02,-bl-.3),P(bw+.3,0.02,bl+.3),P(-bw-.3,0.02,bl+.3)], 'rgba(0,0,0,0.35)', null);
+  // sides
+  quad3d([b[0],b[1],t[1],t[0]], dark, '#03121a');   // back
+  quad3d([b[3],b[2],t[2],t[3]], dark, '#03121a');   // front
+  quad3d([b[1],b[2],t[2],t[1]], dark, '#03121a');   // right
+  quad3d([b[0],b[3],t[3],t[0]], dark, '#03121a');   // left
+  // top
+  quad3d([t[0],t[1],t[2],t[3]], bodyCol, '#03121a');
+  // cabin
+  const cw = 1.05, cf = 0.8, cbk = -0.9, cy0 = base+bh, cy1 = base+bh+0.5;
+  const cb = [P(-cw,cy0,cbk),P(cw,cy0,cbk),P(cw,cy0,cf),P(-cw,cy0,cf)];
+  const ct = [P(-cw,cy1,cbk+0.3),P(cw,cy1,cbk+0.3),P(cw,cy1,cf-0.2),P(-cw,cy1,cf-0.2)];
+  quad3d([cb[0],cb[1],ct[1],ct[0]], '#0a2230', '#03121a');
+  quad3d([cb[3],cb[2],ct[2],ct[3]], '#0a2230', '#03121a');
+  quad3d([cb[1],cb[2],ct[2],ct[1]], '#0a2230', '#03121a');
+  quad3d([cb[0],cb[3],ct[3],ct[0]], '#0a2230', '#03121a');
+  quad3d([ct[0],ct[1],ct[2],ct[3]], '#8fe6ff', '#03121a'); // windshield glow
+  // tail lights
+  line3d(P(-bw,base+bh*0.7,-bl), P(-bw+0.6,base+bh*0.7,-bl), '#ff4060', 3);
+  line3d(P(bw-0.6,base+bh*0.7,-bl), P(bw,base+bh*0.7,-bl), '#ff4060', 3);
+  // wheels (as short lines), steer front wheels visually
+  const st = car.steer * 0.5;
+  function wheel(lx, lz, steer) {
+    const wa = a + (steer ? st : 0);
+    const ws = Math.sin(wa)*0.55, wc = Math.cos(wa)*0.55;
+    const wp = P(lx, 0.0, lz);
+    line3d([wp[0]-ws, 0.1, wp[2]-wc], [wp[0]+ws, 0.1, wp[2]+wc], '#050508', 5);
+  }
+  wheel(-bw, bl-0.6, true); wheel(bw, bl-0.6, true);
+  wheel(-bw, -bl+0.6, false); wheel(bw, -bl+0.6, false);
+}
+
+/* ---------- camera follow ---------- */
+function updateCam(dt) {
+  // sit behind car heading, but lag & swing outward on drift for drama
+  const back = 13.5, up = 7.2;
+  // blend heading with velocity heading a touch so drift shows the side of the car
+  const velAng = Math.atan2(car.vx, car.vz);
+  let followAng = car.angle;
+  if (car.speed > 8) {
+    let d = velAng - car.angle;
+    while (d > Math.PI) d -= 2*Math.PI; while (d < -Math.PI) d += 2*Math.PI;
+    followAng = car.angle + d * 0.35; // look slightly toward travel dir
+  }
+  const tx = car.x - Math.sin(followAng) * back;
+  const tz = car.z - Math.cos(followAng) * back;
+  const k = Math.min(1, 4.5 * dt);
+  cam.x += (tx - cam.x) * k;
+  cam.z += (tz - cam.z) * k;
+  cam.y += (up - cam.y) * k;
+  // yaw toward car with lag
+  let dy = followAng - cam.yaw;
+  while (dy > Math.PI) dy -= 2*Math.PI; while (dy < -Math.PI) dy += 2*Math.PI;
+  cam.yaw += dy * Math.min(1, 5 * dt);
+  // subtle shake at speed
+  const shake = Math.min(1, car.speed / MAX_SPEED) * (car.drifting ? 0.18 : 0.06);
+  cam.x += (Math.random()-.5) * shake;
+  cam.y += (Math.random()-.5) * shake;
+}
+
+/* ---------- main loop ---------- */
+let running = false, last = 0;
+function frame(ts) {
+  if (!running) return;
+  const dt = Math.min(0.033, (ts - last) / 1000 || 0.016);
+  last = ts;
+
+  stepCar(dt);
+  emitDrift(dt);
+  stepSmoke(dt);
+  checkGate();
+  stepScore(dt);
+  updateCam(dt);
+
+  // clear with vertical gradient (sky -> floor haze)
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0a0618'); g.addColorStop(0.5, '#140a26'); g.addColorStop(0.5, '#0d0716'); g.addColorStop(1, '#05040c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  drawGround();
+  drawSkids();
+  drawGates();
+  drawSmoke();
+  drawCar();
+
+  // HUD
+  spdN.textContent = Math.round(car.speed * 3.6);
+
+  requestAnimationFrame(frame);
+}
+
+/* ---------- game control ---------- */
+const banner = document.getElementById('banner');
+document.getElementById('startBtn').addEventListener('click', start);
+function start() {
+  resize();
+  resetCar(); spawnGates();
+  skids = []; smoke = []; score = 0; combo = 1; driftAccrue = 0;
+  scoreN.textContent = '0';
+  cam.x = 0; cam.z = -13.5; cam.y = 7.2; cam.yaw = 0;
+  banner.classList.add('hide');
+  running = true; last = performance.now();
+  requestAnimationFrame(frame);
+}
+
+resize();
+// idle preview render so it isn't blank behind the banner
+(function idle(){
+  if (running) return;
+  ctx.fillStyle = '#0a0618'; ctx.fillRect(0,0,W,H);
+  cam.yaw += 0.0015; drawGround();
+  requestAnimationFrame(idle);
+})();
+})();
+</script>
+</body>
+</html>

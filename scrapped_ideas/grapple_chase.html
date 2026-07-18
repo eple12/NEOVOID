@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>GRAPPLE CHASE</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; background: #05050a;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Courier New', monospace; color: #e8f6ff;
+    overflow: hidden; user-select: none; touch-action: none;
+  }
+  #stage {
+    position: relative;
+    width: min(94vw, 960px);
+    aspect-ratio: 240 / 135;
+    box-shadow: 0 0 0 4px #1c1c2e, 0 0 50px rgba(0,229,255,0.25);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  canvas {
+    display: block; width: 100%; height: 100%;
+    image-rendering: pixelated; image-rendering: -moz-crisp-edges;
+    background: #0b0c14;
+  }
+  #scanlines {
+    position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(rgba(0,0,0,0) 0, rgba(0,0,0,0) 1px, rgba(0,0,0,0.12) 2px, rgba(0,0,0,0.12) 3px);
+    mix-blend-mode: multiply;
+  }
+  #hud {
+    position: absolute; top: 0; left: 0; width: 100%;
+    display: flex; justify-content: space-between;
+    padding: clamp(4px,1vw,10px) clamp(6px,1.6vw,14px);
+    font-size: clamp(9px, 1.7vw, 16px);
+    letter-spacing: 1px; text-shadow: 0 0 4px #000, 0 0 2px #000;
+    pointer-events: none; opacity: 0; transition: opacity .3s;
+  }
+  #hud.show { opacity: 1; }
+  #hud .lbl { color: #7db8c9; }
+  #perfectPop {
+    position: absolute; top: 30%; left: 50%; transform: translate(-50%,-50%) scale(0.5);
+    font-size: clamp(12px, 3vw, 26px); color: #ffe066; font-weight: bold;
+    text-shadow: 0 0 8px #ffb700, 0 0 2px #000; opacity: 0; pointer-events: none;
+    letter-spacing: 2px;
+  }
+  #perfectPop.pop { animation: popfx .55s ease-out; }
+  @keyframes popfx {
+    0% { opacity: 0; transform: translate(-50%,-50%) scale(0.4); }
+    25% { opacity: 1; transform: translate(-50%,-50%) scale(1.15); }
+    60% { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%,-60%) scale(1); }
+  }
+  #countdown {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: clamp(28px, 9vw, 80px); font-weight: bold; color: #fff;
+    text-shadow: 0 0 16px #00e5ff, 0 0 4px #000; pointer-events: none; opacity: 0;
+  }
+  .overlay {
+    position: absolute; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: rgba(5,5,10,0.88); gap: clamp(6px,1.4vh,14px); padding: 4%;
+  }
+  .overlay.show { display: flex; }
+  .overlay h1 {
+    margin: 0; font-size: clamp(18px, 4.5vw, 40px); color: #00e5ff;
+    text-shadow: 0 0 12px rgba(0,229,255,0.7); letter-spacing: 3px;
+  }
+  .overlay h2 {
+    margin: 0; font-size: clamp(14px, 3vw, 26px); color: #ffe066;
+    text-shadow: 0 0 8px rgba(255,224,102,0.6); letter-spacing: 2px;
+  }
+  .overlay p, .overlay .row {
+    margin: 0; font-size: clamp(9px, 1.8vw, 15px); color: #cfe8f0; line-height: 1.7;
+  }
+  .overlay .accent { color: #ffe066; }
+  .overlay .dim { color: #6c8a95; font-size: clamp(8px, 1.4vw, 12px); }
+  .btn {
+    margin-top: 6px; padding: clamp(6px,1.2vw,10px) clamp(16px,3vw,28px);
+    background: linear-gradient(#1c2530, #10151c); color: #00e5ff;
+    border: 2px solid #00e5ff; border-radius: 3px; font-family: inherit;
+    font-size: clamp(10px, 2vw, 16px); letter-spacing: 2px; cursor: pointer;
+    text-shadow: 0 0 6px rgba(0,229,255,0.6);
+    box-shadow: 0 0 10px rgba(0,229,255,0.25);
+  }
+  .btn:active { transform: translateY(1px); }
+  #touchBtn {
+    position: absolute; left: 50%; bottom: 4%; transform: translateX(-50%);
+    width: clamp(60px,16vw,90px); height: clamp(60px,16vw,90px); border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, rgba(0,229,255,0.35), rgba(0,229,255,0.08));
+    border: 2px solid rgba(0,229,255,0.6); display: none; align-items: center; justify-content: center;
+    font-size: clamp(9px,2vw,13px); color: #cfe8f0; letter-spacing: 1px;
+  }
+  @media (pointer: coarse) { #touchBtn { display: flex; } }
+  #touchBtn.active { background: radial-gradient(circle at 35% 30%, rgba(0,229,255,0.7), rgba(0,229,255,0.25)); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="game" width="240" height="135"></canvas>
+  <div id="scanlines"></div>
+  <div id="hud">
+    <div><span class="lbl">LAP</span> <span id="hudLap">0/3</span></div>
+    <div><span class="lbl">TIME</span> <span id="hudTime">0.00</span></div>
+    <div><span class="lbl">BEST</span> <span id="hudBest">--</span></div>
+  </div>
+  <div id="perfectPop">PERFECT!</div>
+  <div id="countdown"></div>
+
+  <div class="overlay show" id="titleScreen">
+    <h1>GRAPPLE CHASE</h1>
+    <p>브레이크도 핸들도 없다.<br>오직 <span class="accent">그래플 훅</span>으로만 코너를 돈다.</p>
+    <p class="dim">노란 점(앵커)에 가까워지면 SPACE(또는 클릭/탭)를 눌러 훅을 걸고,<br>스윙하다 타이밍 맞춰 떼세요. 떼는 순간 다음 직선이 정렬되면 <span class="accent">PERFECT</span> 부스트!</p>
+    <p class="dim">3랩 최고 기록: <span class="accent" id="titleBest">--</span></p>
+    <button class="btn" id="startBtn">START</button>
+  </div>
+
+  <div class="overlay" id="finishScreen">
+    <h1 id="finishTitle">FINISH!</h1>
+    <h2 id="newRecordTxt" style="display:none;">NEW RECORD!</h2>
+    <div class="row" id="lapBreakdown"></div>
+    <p>TOTAL <span class="accent" id="finishTotal">0.00s</span> &nbsp;|&nbsp; BEST <span class="accent" id="finishBest">0.00s</span></p>
+    <button class="btn" id="restartBtn">RETRY (R)</button>
+  </div>
+
+  <div id="touchBtn">HOLD</div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const W = 240, H = 135;
+
+  // ---------- math helpers ----------
+  const sub = (a,b)=>({x:a.x-b.x,y:a.y-b.y});
+  const norm = v=>{ const l=Math.hypot(v.x,v.y)||1; return {x:v.x/l,y:v.y/l}; };
+  const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+  function catmullRom1D(p0,p1,p2,p3,t){
+    const t2=t*t, t3=t2*t;
+    return 0.5*((2*p1) + (-p0+p2)*t + (2*p0-5*p1+4*p2-p3)*t2 + (-p0+3*p1-3*p2+p3)*t3);
+  }
+
+  // ---------- track definition ----------
+  const CP = [
+    {x:40,  y:100, anchor:false},
+    {x:120, y:112, anchor:false},
+    {x:195, y:100, anchor:false},
+    {x:213, y:62,  anchor:true },
+    {x:172, y:24,  anchor:false},
+    {x:100, y:14,  anchor:true },
+    {x:52,  y:28,  anchor:true },
+    {x:24,  y:68,  anchor:false},
+  ];
+  const SEG = 28;
+  const TRACK_HALF_W = 11;
+  const TRACK_WIDTH = TRACK_HALF_W*2;
+  const ANCHOR_INSET = 18;
+  const GRAPPLE_RANGE = 60;
+  const MIN_RADIUS = 9, MAX_RADIUS = 60;
+  const REEL_RATE = 45;
+  const THRUST = 34, DRAG = 0.55, MAX_SPEED = 62;
+  const LAPS_TOTAL = 3;
+  const GHOST_SAMPLE_DT = 0.1;
+
+  function buildTrack(){
+    const N = CP.length, pts=[];
+    for(let i=0;i<N;i++){
+      const p0=CP[(i-1+N)%N], p1=CP[i], p2=CP[(i+1)%N], p3=CP[(i+2)%N];
+      for(let s=0;s<SEG;s++){
+        const t=s/SEG;
+        pts.push({
+          x: catmullRom1D(p0.x,p1.x,p2.x,p3.x,t),
+          y: catmullRom1D(p0.y,p1.y,p2.y,p3.y,t)
+        });
+      }
+    }
+    return pts;
+  }
+  const trackPoints = buildTrack();
+  const Ntp = trackPoints.length;
+  const centroid = trackPoints.reduce((a,p)=>({x:a.x+p.x/Ntp,y:a.y+p.y/Ntp}),{x:0,y:0});
+
+  function outwardAt(p){ return norm(sub(p,centroid)); }
+  function tangentAt(idx){
+    const a=trackPoints[(idx-3+Ntp)%Ntp], b=trackPoints[(idx+3)%Ntp];
+    return norm(sub(b,a));
+  }
+  function nearestTrackIndex(p){
+    let bestI=0,bestD=Infinity;
+    for(let i=0;i<Ntp;i++){
+      const dx=trackPoints[i].x-p.x, dy=trackPoints[i].y-p.y;
+      const d=dx*dx+dy*dy;
+      if(d<bestD){bestD=d;bestI=i;}
+    }
+    return {idx:bestI,dist:Math.sqrt(bestD)};
+  }
+
+  const anchors = [];
+  CP.forEach((cp,i)=>{
+    if(!cp.anchor) return;
+    const idx=i*SEG;
+    const p=trackPoints[idx];
+    const outward=outwardAt(p);
+    anchors.push({x:p.x-outward.x*ANCHOR_INSET, y:p.y-outward.y*ANCHOR_INSET});
+  });
+
+  // ---------- audio ----------
+  let audioCtx=null, engineOsc=null, engineGain=null;
+  function ensureAudio(){
+    if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+    if(audioCtx.state==='suspended') audioCtx.resume();
+  }
+  function beep(freq,dur,type,vol,glideTo){
+    if(!audioCtx) return;
+    const t0=audioCtx.currentTime;
+    const osc=audioCtx.createOscillator(), gain=audioCtx.createGain();
+    osc.type=type||'square';
+    osc.frequency.setValueAtTime(freq,t0);
+    if(glideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(1,glideTo),t0+dur);
+    gain.gain.setValueAtTime(vol||0.15,t0);
+    gain.gain.exponentialRampToValueAtTime(0.001,t0+dur);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start(t0); osc.stop(t0+dur+0.02);
+  }
+  function initEngine(){
+    if(!audioCtx || engineOsc) return;
+    engineOsc=audioCtx.createOscillator(); engineOsc.type='sawtooth';
+    engineGain=audioCtx.createGain(); engineGain.gain.value=0;
+    engineOsc.connect(engineGain).connect(audioCtx.destination);
+    engineOsc.start();
+  }
+  function updateEngine(speed){
+    if(!engineOsc) return;
+    const f=60+speed*3.2;
+    engineOsc.frequency.setTargetAtTime(f,audioCtx.currentTime,0.05);
+    engineGain.gain.setTargetAtTime(Math.min(0.045,0.012+speed*0.0006),audioCtx.currentTime,0.1);
+  }
+
+  // ---------- game state ----------
+  let state='title'; // title | countdown | racing | finished
+  let grappleHeld=false;
+  let bike, attachedAnchor=null, currentRadius=0, swingAngle=0, swingDir=1;
+  let elapsed=0, lapStartTime=0, lapCount=0, lapTimes=[];
+  let prevIdx=0, currentIdx=0, invuln=0, shake=0;
+  let particles=[], exhaustAccum=0, ghostAccum=0, samples=[];
+  let ghostData=null, bestTime=null;
+  let countdownT=0;
+
+  const BIKE_PIXELS = [
+    [3,0,'body'],
+    [2,-1,'body'],[2,0,'body'],[2,1,'body'],
+    [1,-2,'body'],[1,-1,'accent'],[1,0,'accent'],[1,1,'accent'],[1,2,'body'],
+    [0,-2,'body'],[0,-1,'body'],[0,0,'body'],[0,1,'body'],[0,2,'body'],
+    [-1,-2,'wheel'],[-1,2,'wheel'],
+    [-2,-1,'body'],[-2,0,'body'],[-2,1,'body'],
+  ];
+  const COLORS = {body:'#3ad6ff', accent:'#ffe066', wheel:'#1c1c2e'};
+
+  function loadBest(){
+    try{
+      const t=localStorage.getItem('grappleChase_bestTime');
+      const g=localStorage.getItem('grappleChase_ghost');
+      bestTime = t? parseFloat(t): null;
+      ghostData = g? JSON.parse(g): null;
+    }catch(e){ bestTime=null; ghostData=null; }
+    document.getElementById('titleBest').textContent = bestTime? bestTime.toFixed(2)+'s' : '--';
+    document.getElementById('hudBest').textContent = bestTime? bestTime.toFixed(2)+'s' : '--';
+  }
+
+  function resetRun(){
+    const p0 = trackPoints[0];
+    const t0 = tangentAt(0);
+    bike = { pos:{x:p0.x,y:p0.y}, heading:Math.atan2(t0.y,t0.x), speed:0 };
+    attachedAnchor=null; currentRadius=0;
+    lastAnchor=null; lastAnchorBlocked=false;
+    elapsed=0; lapStartTime=0; lapCount=0; lapTimes=[];
+    prevIdx=0; currentIdx=0; invuln=0; shake=0;
+    particles=[]; exhaustAccum=0; ghostAccum=0; samples=[];
+  }
+
+  function spawnParticles(x,y,color,count,spreadSpeed){
+    for(let i=0;i<count;i++){
+      const a=Math.random()*Math.PI*2, s=Math.random()*spreadSpeed;
+      particles.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:0.35+Math.random()*0.3,age:0,color});
+    }
+  }
+  function updateParticles(dt){
+    for(const p of particles){ p.age+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vx*=0.9; p.vy*=0.9; }
+    particles = particles.filter(p=>p.age<p.life);
+  }
+
+  function addShake(v){ shake=Math.min(shake+v,6); }
+
+  function crash(idx){
+    const p=trackPoints[idx], outward=outwardAt(p);
+    bike.speed*=0.35;
+    const tangent=tangentAt(idx);
+    bike.heading=Math.atan2(tangent.y,tangent.x);
+    bike.pos.x=p.x+outward.x*(TRACK_HALF_W-2);
+    bike.pos.y=p.y+outward.y*(TRACK_HALF_W-2);
+    attachedAnchor=null;
+    invuln=0.5;
+    addShake(6);
+    spawnParticles(bike.pos.x,bike.pos.y,'#ff5566',10,40);
+    beep(120,0.25,'square',0.2,40);
+  }
+
+  let lastAnchor=null, lastAnchorBlocked=false;
+  function tryAttach(){
+    let best=null,bestD=Infinity;
+    for(const a of anchors){
+      if(a===lastAnchor && lastAnchorBlocked) continue;
+      const d=Math.hypot(a.x-bike.pos.x,a.y-bike.pos.y);
+      if(d<GRAPPLE_RANGE && d<bestD){ bestD=d; best=a; }
+    }
+    if(best) attach(best);
+  }
+  function attach(a){
+    attachedAnchor=a;
+    currentRadius=clamp(Math.hypot(a.x-bike.pos.x,a.y-bike.pos.y),MIN_RADIUS,MAX_RADIUS);
+    const rel={x:bike.pos.x-a.x,y:bike.pos.y-a.y};
+    swingAngle=Math.atan2(rel.y,rel.x);
+    const velDir={x:Math.cos(bike.heading),y:Math.sin(bike.heading)};
+    const crossv=rel.x*velDir.y-rel.y*velDir.x;
+    swingDir = crossv>=0? 1: -1;
+    beep(440,0.08,'square',0.12,880);
+  }
+  function detach(){
+    lastAnchor=attachedAnchor; lastAnchorBlocked=true;
+    attachedAnchor=null;
+    bike.speed=Math.min(bike.speed, MAX_SPEED*1.3);
+    const aheadIdx=(currentIdx+14)%Ntp;
+    const at=tangentAt(aheadIdx);
+    const align=Math.cos(bike.heading)*at.x+Math.sin(bike.heading)*at.y;
+    if(align>0.88){
+      bike.speed*=1.12;
+      spawnParticles(bike.pos.x,bike.pos.y,'#ffe066',8,30);
+      beep(880,0.06,'sine',0.15,1320);
+      const pop=document.getElementById('perfectPop');
+      pop.classList.remove('pop'); void pop.offsetWidth; pop.classList.add('pop');
+    } else {
+      beep(300,0.15,'sawtooth',0.15,600);
+    }
+  }
+  function updateSwing(dt){
+    const rOld=currentRadius;
+    currentRadius=Math.max(MIN_RADIUS,currentRadius-REEL_RATE*dt);
+    if(currentRadius<rOld){
+      bike.speed *= (rOld/currentRadius);
+      bike.speed = Math.min(bike.speed, MAX_SPEED*1.8);
+    }
+    const angularVel=bike.speed/Math.max(currentRadius,1);
+    swingAngle += angularVel*dt*swingDir;
+    bike.pos.x=attachedAnchor.x+Math.cos(swingAngle)*currentRadius;
+    bike.pos.y=attachedAnchor.y+Math.sin(swingAngle)*currentRadius;
+    bike.heading=Math.atan2(Math.cos(swingAngle)*swingDir, -Math.sin(swingAngle)*swingDir);
+    if(currentRadius<=MIN_RADIUS+0.01){ detach(); }
+  }
+  function updateFreeFlight(dt){
+    bike.speed += THRUST*dt;
+    bike.speed -= DRAG*bike.speed*dt;
+    bike.speed = clamp(bike.speed,0,MAX_SPEED);
+    bike.pos.x += Math.cos(bike.heading)*bike.speed*dt;
+    bike.pos.y += Math.sin(bike.heading)*bike.speed*dt;
+  }
+
+  function finishRace(){
+    state='finished';
+    const total=elapsed;
+    const isNew = !bestTime || total<bestTime;
+    if(isNew){
+      bestTime=total;
+      try{
+        localStorage.setItem('grappleChase_bestTime', String(total));
+        localStorage.setItem('grappleChase_ghost', JSON.stringify(samples));
+      }catch(e){}
+      ghostData = samples;
+    }
+    document.getElementById('newRecordTxt').style.display = isNew? 'block':'none';
+    document.getElementById('finishTotal').textContent = total.toFixed(2)+'s';
+    document.getElementById('finishBest').textContent = (bestTime||total).toFixed(2)+'s';
+    document.getElementById('lapBreakdown').innerHTML =
+      lapTimes.map((t,i)=>'LAP '+(i+1)+': '+t.toFixed(2)+'s').join(' &nbsp;|&nbsp; ');
+    document.getElementById('hudBest').textContent = (bestTime).toFixed(2)+'s';
+    document.getElementById('finishScreen').classList.add('show');
+    document.getElementById('hud').classList.remove('show');
+  }
+
+  function updateRacing(dt){
+    elapsed += dt;
+    ghostAccum += dt;
+    if(ghostAccum>=GHOST_SAMPLE_DT){
+      ghostAccum-=GHOST_SAMPLE_DT;
+      samples.push({x:bike.pos.x,y:bike.pos.y,a:bike.heading});
+    }
+    invuln=Math.max(0,invuln-dt);
+
+    if(grappleHeld && !attachedAnchor) tryAttach();
+    if(!grappleHeld && attachedAnchor) detach();
+
+    if(attachedAnchor) updateSwing(dt); else updateFreeFlight(dt);
+
+    if(lastAnchorBlocked && lastAnchor && Math.hypot(lastAnchor.x-bike.pos.x,lastAnchor.y-bike.pos.y) > GRAPPLE_RANGE*1.2){
+      lastAnchorBlocked=false;
+    }
+
+    exhaustAccum+=dt;
+    if(bike.speed>15 && exhaustAccum>0.05){
+      exhaustAccum=0;
+      const bx=bike.pos.x-Math.cos(bike.heading)*3, by=bike.pos.y-Math.sin(bike.heading)*3;
+      spawnParticles(bx,by,'rgba(58,214,255,0.5)',1,6);
+    }
+    updateEngine(bike.speed);
+
+    const {idx} = nearestTrackIndex(bike.pos);
+    currentIdx=idx;
+    if(invuln<=0){
+      const p=trackPoints[idx], outward=outwardAt(p);
+      const signed=(bike.pos.x-p.x)*outward.x+(bike.pos.y-p.y)*outward.y;
+      if(signed > TRACK_HALF_W+3) crash(idx);
+    }
+    if(prevIdx > Ntp*0.75 && idx < Ntp*0.25){
+      lapCount++;
+      const lt=elapsed-lapStartTime;
+      lapTimes.push(lt); lapStartTime=elapsed;
+      beep(660,0.12,'triangle',0.15,990);
+      if(lapCount>=LAPS_TOTAL){ finishRace(); }
+    }
+    prevIdx=idx;
+
+    document.getElementById('hudLap').textContent = Math.min(lapCount+1,LAPS_TOTAL)+'/'+LAPS_TOTAL;
+    document.getElementById('hudTime').textContent = elapsed.toFixed(2);
+  }
+
+  function startCountdown(){
+    ensureAudio(); initEngine();
+    document.getElementById('titleScreen').classList.remove('show');
+    document.getElementById('finishScreen').classList.remove('show');
+    resetRun();
+    state='countdown';
+    countdownT=3.6;
+    document.getElementById('hud').classList.add('show');
+    document.getElementById('hudBest').textContent = bestTime? bestTime.toFixed(2)+'s':'--';
+  }
+  function updateCountdown(dt){
+    countdownT -= dt;
+    const cd=document.getElementById('countdown');
+    cd.style.opacity=1;
+    if(countdownT>2.6){ cd.textContent='3'; }
+    else if(countdownT>1.6){ cd.textContent='2'; }
+    else if(countdownT>0.6){ cd.textContent='1'; }
+    else if(countdownT>0){ cd.textContent='GO!'; }
+    else {
+      cd.style.opacity=0;
+      state='racing';
+      elapsed=0; lapStartTime=0;
+    }
+  }
+
+  function restart(){ startCountdown(); }
+
+  // ---------- input ----------
+  window.addEventListener('keydown', e=>{
+    if(e.code==='Space'){
+      e.preventDefault();
+      if(state==='title') startCountdown();
+      else if(state==='racing') grappleHeld=true;
+      else if(state==='finished') restart();
+    }
+    if(e.code==='KeyR'){ if(state==='racing'||state==='finished') restart(); }
+  });
+  window.addEventListener('keyup', e=>{ if(e.code==='Space') grappleHeld=false; });
+
+  function pointerDown(e){
+    e.preventDefault();
+    if(state==='title') startCountdown();
+    else if(state==='racing') grappleHeld=true;
+    else if(state==='finished') restart();
+  }
+  function pointerUp(e){ grappleHeld=false; }
+
+  canvas.addEventListener('pointerdown', pointerDown);
+  window.addEventListener('pointerup', pointerUp);
+  window.addEventListener('pointercancel', pointerUp);
+
+  const touchBtn=document.getElementById('touchBtn');
+  touchBtn.addEventListener('pointerdown', e=>{ e.preventDefault(); e.stopPropagation(); touchBtn.classList.add('active'); pointerDown(e); });
+  touchBtn.addEventListener('pointerup', e=>{ touchBtn.classList.remove('active'); });
+
+  document.getElementById('startBtn').addEventListener('click', startCountdown);
+  document.getElementById('restartBtn').addEventListener('click', restart);
+
+  // ---------- render ----------
+  function drawTrack(){
+    ctx.beginPath();
+    ctx.moveTo(trackPoints[0].x,trackPoints[0].y);
+    for(let i=1;i<Ntp;i++) ctx.lineTo(trackPoints[i].x,trackPoints[i].y);
+    ctx.closePath();
+    ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.strokeStyle='#0d5064'; ctx.lineWidth=TRACK_WIDTH+6; ctx.stroke();
+    ctx.strokeStyle='#23212f'; ctx.lineWidth=TRACK_WIDTH; ctx.stroke();
+    ctx.setLineDash([3,5]);
+    ctx.strokeStyle='rgba(255,210,63,0.5)'; ctx.lineWidth=1; ctx.stroke();
+    ctx.setLineDash([]);
+
+    const p=trackPoints[0], t=tangentAt(0), n={x:-t.y,y:t.x};
+    for(let k=-5;k<=5;k++){
+      ctx.fillStyle=(k%2===0)?'#eeeeee':'#222222';
+      ctx.fillRect(Math.round(p.x+n.x*k), Math.round(p.y+n.y*k), 1, 1);
+    }
+  }
+  function drawAnchors(){
+    const t=performance.now()/1000;
+    for(const a of anchors){
+      const pulse=2+Math.sin(t*4+a.x)*0.6;
+      ctx.fillStyle = (attachedAnchor===a)? '#ffffff':'#ffe066';
+      ctx.beginPath(); ctx.arc(a.x,a.y,pulse,0,Math.PI*2); ctx.fill();
+    }
+    if(attachedAnchor){
+      const steps=8;
+      for(let i=1;i<steps;i++){
+        const tt=i/steps;
+        const lx=attachedAnchor.x+(bike.pos.x-attachedAnchor.x)*tt;
+        const ly=attachedAnchor.y+(bike.pos.y-attachedAnchor.y)*tt;
+        ctx.fillStyle='rgba(255,255,255,0.7)';
+        ctx.fillRect(Math.round(lx),Math.round(ly),1,1);
+      }
+    }
+  }
+  function drawParticlesFn(){
+    for(const p of particles){
+      const alpha=1-p.age/p.life;
+      ctx.globalAlpha=Math.max(0,alpha);
+      ctx.fillStyle=p.color;
+      ctx.fillRect(Math.round(p.x),Math.round(p.y),1,1);
+    }
+    ctx.globalAlpha=1;
+  }
+  function drawBikeAt(pos,heading,ghost){
+    const cos=Math.cos(heading), sin=Math.sin(heading);
+    for(const px of BIKE_PIXELS){
+      const dx=px[0], dy=px[1], key=px[2];
+      const rx=dx*cos-dy*sin, ry=dx*sin+dy*cos;
+      ctx.fillStyle = ghost? 'rgba(124,255,153,0.55)' : COLORS[key];
+      ctx.fillRect(Math.round(pos.x+rx), Math.round(pos.y+ry), 1, 1);
+    }
+  }
+  function drawGhost(){
+    if(!ghostData || !ghostData.length) return;
+    const idx=Math.floor(elapsed/GHOST_SAMPLE_DT);
+    if(idx>=ghostData.length) return;
+    const g=ghostData[idx];
+    drawBikeAt({x:g.x,y:g.y}, g.a, true);
+  }
+
+  function render(){
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#0b0c14';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='rgba(255,255,255,0.05)';
+    for(let gx=4;gx<W;gx+=10){ for(let gy=4;gy<H;gy+=10){ ctx.fillRect(gx,gy,1,1); } }
+
+    ctx.save();
+    const sx=(Math.random()-0.5)*shake, sy=(Math.random()-0.5)*shake;
+    ctx.translate(sx,sy);
+
+    drawTrack();
+    drawAnchors();
+    if(state==='racing') drawGhost();
+    drawParticlesFn();
+    if(bike) drawBikeAt(bike.pos, bike.heading, false);
+
+    ctx.restore();
+  }
+
+  // ---------- main loop ----------
+  function update(dt){
+    updateParticles(dt);
+    shake=Math.max(0,shake-dt*20);
+    if(state==='countdown') updateCountdown(dt);
+    else if(state==='racing') updateRacing(dt);
+    else if(state==='finished' && bike){
+      bike.speed=Math.max(0,bike.speed-dt*40);
+      bike.pos.x += Math.cos(bike.heading)*bike.speed*dt;
+      bike.pos.y += Math.sin(bike.heading)*bike.speed*dt;
+    }
+  }
+
+  let last=performance.now();
+  function frame(now){
+    let dt=(now-last)/1000; last=now; dt=Math.min(dt,0.033);
+    update(dt);
+    render();
+    window.__debug = { state, bike, attachedAnchor:!!attachedAnchor, lapCount, elapsed, grappleHeld };
+    requestAnimationFrame(frame);
+  }
+
+  loadBest();
+  bike = { pos:{x:trackPoints[0].x,y:trackPoints[0].y}, heading:Math.atan2(tangentAt(0).y,tangentAt(0).x), speed:0 };
+  requestAnimationFrame(frame);
+
+  window.__test = {
+    step: function(dt){ update(dt); render(); },
+    setGrapple: function(v){ grappleHeld = v; },
+    startCountdown: startCountdown,
+    restart: restart,
+    anchors: anchors,
+    trackPoints: trackPoints,
+    Ntp: Ntp,
+    getState: function(){
+      return {
+        state: state,
+        bike: bike ? {x:bike.pos.x, y:bike.pos.y, heading:bike.heading, speed:bike.speed} : null,
+        attachedAnchor: attachedAnchor ? {x:attachedAnchor.x, y:attachedAnchor.y} : null,
+        currentRadius: currentRadius,
+        lapCount: lapCount,
+        lapTimes: lapTimes.slice(),
+        elapsed: elapsed,
+        currentIdx: currentIdx,
+        invuln: invuln,
+        shake: shake,
+        particles: particles.length,
+        countdownT: countdownT
+      };
+    }
+  };
+})();
+</script>
+</body>
+</html>
