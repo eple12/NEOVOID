@@ -619,7 +619,7 @@ let storyIdx = 0, storyT = 0, storyChain = false;
 let tut = null;
 let planetIdx = 0, planet = null;
 let bossPhase = false, victoryT = 0, expandStep = 0, mopUpT = -1;
-let galaxyHover = -1, menuHover = -1;
+let galaxyHover = -1, menuHover = -1, overHover = -1;
 let conquered = [];
 try { conquered = JSON.parse(localStorage.getItem('neovoid_conquered') || '[]') || []; } catch (_) { conquered = []; }
 let score = 0, best = +(localStorage.getItem('neovoid_best') || 0);
@@ -694,21 +694,27 @@ const arenaCY = () => (arena.y0 + arena.y1) / 2;
 // GALAXY CAMPAIGN
 // ============================================================
 const PLANETS = [
-  { name: 'VESPER',   color: '#58ff9b', waves: 2, size: 0.7,  boss: ['sentinel'], desc: 'outer-rim scout world' },
-  { name: 'KORVAX',   color: '#ff9f43', waves: 3, size: 0.75, boss: ['warden'],   desc: 'fractured mining colony' },
-  { name: 'NYX-7',    color: '#a06bff', waves: 3, size: 0.8,  boss: ['hive'],     desc: 'infested breeding ground' },
-  { name: 'SOLARIS',  color: '#ffe86b', waves: 4, size: 0.85, boss: ['lancer'],   desc: 'blazing fortress orbit' },
-  { name: 'UMBRA',    color: '#ff5ce1', waves: 4, size: 0.85, boss: ['phantom'],  desc: 'realm of the unseen' },
-  { name: 'KRAKEN',   color: '#3ff0ff', waves: 4, size: 0.9,  boss: ['warden', 'hive'], desc: 'twin-guarded abyss' },
-  { name: 'INFERNO',  color: '#ff6b6b', waves: 5, size: 0.95, boss: ['lancer', 'phantom'], desc: 'elite legion stronghold' },
-  { name: 'THE CORE', color: '#ffffff', waves: 5, size: 1,    boss: ['sentinel', 'warden', 'hive', 'lancer', 'phantom'], desc: 'heart of the void galaxy' },
+  { name: 'VESPER',   color: '#58ff9b', waves: 3,  size: 0.7,  boss: ['sentinel'], desc: 'outer-rim scout world' },
+  { name: 'KORVAX',   color: '#ff9f43', waves: 4,  size: 0.75, boss: ['warden'],   desc: 'fractured mining colony' },
+  { name: 'NYX-7',    color: '#a06bff', waves: 5,  size: 0.8,  boss: ['hive'],     desc: 'infested breeding ground' },
+  { name: 'SOLARIS',  color: '#ffe86b', waves: 6,  size: 0.85, boss: ['lancer'],   desc: 'blazing fortress orbit' },
+  { name: 'UMBRA',    color: '#ff5ce1', waves: 7,  size: 0.85, boss: ['phantom'],  desc: 'realm of the unseen' },
+  { name: 'KRAKEN',   color: '#3ff0ff', waves: 8,  size: 0.9,  boss: ['warden', 'hive'], desc: 'twin-guarded abyss' },
+  { name: 'INFERNO',  color: '#ff6b6b', waves: 9,  size: 0.95, boss: ['lancer', 'phantom'], desc: 'elite legion stronghold' },
+  { name: 'THE CORE', color: '#ffffff', waves: 10, size: 1,    boss: ['sentinel', 'warden', 'hive', 'lancer', 'phantom'], desc: 'heart of the void galaxy' },
 ];
 // effective difficulty wave (campaign planets map onto the endless curve)
-function dwave() { return mode === 'campaign' ? Math.round(planetIdx * 2.8) + wave : wave; }
+// planets now run longer, so weight the wave term down to keep the curve in the tuned range
+function dwave() { return mode === 'campaign' ? Math.round(planetIdx * 2.2 + wave * 0.8) : wave; }
 
 // ---- late-game difficulty curves ----
-// mobs get exponentially tankier — flat damage stacking should stop keeping pace
-function enemyHpMul(w) { return Math.pow(1.045, Math.max(0, w - 5)); }
+// mob toughness. Endless rides the wave curve. Campaign deliberately does NOT use dwave here:
+// arriving at a late planet would otherwise put 2x-hp mobs on wave 1 and stall the run before
+// the player has any upgrades. Each planet restarts gentle and ramps hard within itself.
+function mobHpMul() {
+  if (mode === 'campaign') return Math.pow(1.06, planetIdx) * Math.pow(1.09, Math.max(0, wave - 1));
+  return Math.pow(1.045, Math.max(0, wave - 5));
+}
 // bosses scale super-exponentially: OD should be a dent in the bar, not the fight
 function bossHp(w, hpMul, packScale) {
   return Math.round((60 + w * 11) * Math.pow(1.062, w) * hpMul * packScale * campaignBossMul());
@@ -755,15 +761,24 @@ const STORY = [
   { scene: 'map',   color: '#a06bff', lines: ['Reclaim every fallen world.', 'Outfly its guardian. Break its core.', 'Then carve a path to THE CORE itself.'] },
   { scene: 'call',  color: '#ffe86b', lines: ['The void is already watching.', 'It will send everything it has.', 'Launch when ready, pilot.'] },
 ];
+// played once THE CORE falls and every world is back under your flag
+const ENDING = [
+  { scene: 'corefall', color: '#ffffff', lines: ['The last core came apart in your sights.', 'For one long breath, the galaxy held still —', 'and the geometry forgot how to hold its shape.'] },
+  { scene: 'map',      color: '#a06bff', lines: ['The dark between the stars thinned.', 'Eight worlds, one after another,', 'remembered what light was for.'] },
+  { scene: 'peace',    color: '#58ff9b', lines: ['The Neon Reach came back on.', 'Not as it was — brighter, and harder-won.', 'Every colour on that map is yours.'] },
+  { scene: 'ship',     color: '#8ffbff', lines: ['The prototype still flies. So do you.', 'Somewhere past the rim, something is still counting.', 'Until then, pilot: the reach is quiet.'] },
+];
 const STORY_CPS = 34; // characters per second reveal
+let storyDeck = STORY; // STORY on the way in, ENDING on the way out
 function storyFullChars(p) { return p.lines.join('\n').length; }
-function startStory(chain) {
+function startStory(chain, deck) {
+  storyDeck = deck || STORY;
   storyIdx = 0; storyT = 0; storyChain = !!chain;
   state = S_STORY;
   initAudio();
 }
 function advanceStory() {
-  const p = STORY[storyIdx];
+  const p = storyDeck[storyIdx];
   if (storyT * STORY_CPS < storyFullChars(p)) {
     storyT = storyFullChars(p) / STORY_CPS; // reveal the rest instantly
     SFX.pick && SFX.pick();
@@ -771,10 +786,11 @@ function advanceStory() {
   }
   storyIdx++;
   storyT = 0;
-  if (storyIdx >= STORY.length) endStory();
+  if (storyIdx >= storyDeck.length) endStory();
   else SFX.wave && SFX.wave();
 }
 function endStory() {
+  if (storyDeck === ENDING) { state = S_END; storyDeck = STORY; return; }
   if (storyChain) startTutorial(true);
   else { state = S_MENU; menuHover = 0; }
 }
@@ -948,7 +964,7 @@ function spawnEnemy(type, x, y, opts) {
   } else {
     // late-game hp scaling so damage stacking stays honest
     const bonus = Math.floor(Math.max(0, dwave() - 8) / 5);
-    e.hp = Math.max(1, Math.round((e.hp + bonus) * enemyHpMul(dwave())));
+    e.hp = Math.max(1, Math.round((e.hp + bonus) * mobHpMul()));
     e.maxHp = e.hp;
   }
   if (type === 'sniper') e.fireT = rand(1.4, 2.8);
@@ -1544,6 +1560,7 @@ function playerDie() {
   }
   if (lives <= 0) {
     state = S_OVER;
+    overHover = -1;
     overT = 0; overScore = 0;
     newBest = mode === 'endless' && score > best;
     if (newBest) { best = score; localStorage.setItem('neovoid_best', best); }
@@ -1735,9 +1752,10 @@ function update(dt, raw) {
       localStorage.setItem('neovoid_conquered', JSON.stringify(conquered));
       let all = true;
       for (let i = 0; i < PLANETS.length; i++) if (!conquered[i]) { all = false; break; }
-      state = all ? S_END : S_GALAXY;
       galaxyHover = -1;
       setArena(1, true);
+      if (all) startStory(false, ENDING); // the galaxy is yours — play it out
+      else state = S_GALAXY;
       return;
     }
   }
@@ -1987,10 +2005,23 @@ function update(dt, raw) {
       if (Math.abs(e.vx) < 5 && Math.abs(e.vy) < 5) {
         const a = rand(0, TAU); e.vx = Math.cos(a) * 95 * (e.spdMul || 1); e.vy = Math.sin(a) * 95 * (e.spdMul || 1);
       }
-      if (e.x < arena.x0 + e.r && e.vx < 0) e.vx *= -1;
-      if (e.x > arena.x1 - e.r && e.vx > 0) e.vx *= -1;
-      if (e.y < arena.y0 + e.r && e.vy < 0) e.vy *= -1;
-      if (e.y > arena.y1 - e.r && e.vy > 0) e.vy *= -1;
+      // movement clamps position to the wall, so the old strict `<` never fired and
+      // wanderers pinned themselves into corners forever — test against the clamp itself
+      if (e.x <= arena.x0 + e.r && e.vx < 0) { e.vx = Math.abs(e.vx); e.x = arena.x0 + e.r + 1; }
+      if (e.x >= arena.x1 - e.r && e.vx > 0) { e.vx = -Math.abs(e.vx); e.x = arena.x1 - e.r - 1; }
+      if (e.y <= arena.y0 + e.r && e.vy < 0) { e.vy = Math.abs(e.vy); e.y = arena.y0 + e.r + 1; }
+      if (e.y >= arena.y1 - e.r && e.vy > 0) { e.vy = -Math.abs(e.vy); e.y = arena.y1 - e.r - 1; }
+      // a perfectly axis-aligned bounce can still retrace the same line — jitter the heading
+      if (e.bounceT === undefined) e.bounceT = 0;
+      e.bounceT -= dt;
+      if (e.bounceT <= 0 &&
+          (e.x <= arena.x0 + e.r + 2 || e.x >= arena.x1 - e.r - 2 ||
+           e.y <= arena.y0 + e.r + 2 || e.y >= arena.y1 - e.r - 2)) {
+        e.bounceT = 0.35;
+        const sp = Math.hypot(e.vx, e.vy) || 95 * (e.spdMul || 1);
+        const na = Math.atan2(e.vy, e.vx) + rand(-0.5, 0.5);
+        e.vx = Math.cos(na) * sp; e.vy = Math.sin(na) * sp;
+      }
     } else if (e.type === 'splitter') {
       const sp = 72 * (e.spdMul || 1);
       e.vx += ((dx / d) * sp - e.vx) * Math.min(1, 2 * dt);
@@ -2333,6 +2364,44 @@ function drawStoryScene(p, t, now) {
     pts.forEach((pt, i) => i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]));
     ctx.stroke(); ctx.setLineDash([]);
     pts.forEach((pt, i) => drawPlanet(pt[0], pt[1], i === 7 ? 20 : 11, now + i * 700, cols[i], i === 7 ? { ring: true } : {}));
+  } else if (p.scene === 'corefall') {
+    // the shattered core: a collapsing white heart throwing debris, ship pulling away
+    const br = 74 + Math.sin(now * 0.003) * 5;
+    const g = ctx.createRadialGradient(cx + 120, cy, 4, cx + 120, cy, br * 2.6);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.35, 'rgba(200,150,255,0.35)');
+    g.addColorStop(1, 'rgba(120,60,200,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx + 120 - br * 2.6, cy - br * 2.6, br * 5.2, br * 5.2);
+    // fracture lines radiating out of the break
+    ctx.save();
+    ctx.translate(cx + 120, cy);
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * TAU + now * 0.0004;
+      const len = br * (1.15 + ((i * 37) % 60) / 100);
+      ctx.strokeStyle = 'rgba(255,255,255,' + (0.5 - (i % 3) * 0.12).toFixed(2) + ')';
+      ctx.lineWidth = 2.5 - (i % 3) * 0.6;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * br * 0.3, Math.sin(a) * br * 0.3);
+      ctx.lineTo(Math.cos(a) * len, Math.sin(a) * len);
+      ctx.stroke();
+    }
+    // tumbling shards of what used to be the core
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * TAU + now * 0.0011;
+      const rr = br * 1.5 + ((i * 53) % 110);
+      ctx.save();
+      ctx.translate(Math.cos(a) * rr, Math.sin(a) * rr * 0.8);
+      ctx.rotate(now * 0.002 + i);
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 1.5;
+      const s = 5 + (i % 4) * 2.5;
+      ctx.beginPath(); ctx.rect(-s / 2, -s / 2, s, s); ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+    drawGlow(cx - 250, cy + 20, 52, RGBA.player, 0.4);
+    drawShip(cx - 250, cy + 20, Math.PI, 1, 2.2);
   } else if (p.scene === 'call') {
     drawGlow(cx - 240, cy, 50, RGBA.player, 0.4);
     drawShip(cx - 240, cy, 0, 1, 2.2);
@@ -2345,7 +2414,7 @@ function drawStoryScene(p, t, now) {
   }
 }
 function drawStory(now) {
-  const p = STORY[storyIdx];
+  const p = storyDeck[storyIdx];
   const t = storyT;
   drawStoryScene(p, t, now);
   // narration panel
@@ -2610,6 +2679,44 @@ function draw(now) {
       ctx.beginPath();
       ctx.arc(player.x, player.y, 19, -Math.PI / 2, -Math.PI / 2 + TAU * prog);
       ctx.stroke();
+    }
+
+    // status rings — concentric so they never overlap the shield ring at r=19:
+    //   r=25 dash cooldown (cyan)   r=30 overdrive charge (gem -> gold)
+    if (odActive <= 0) {
+      const dashProg = player.dashCd > 0 ? 1 - player.dashCd / stat.dashCdMax() : 1;
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = 'rgba(125,249,255,0.14)';
+      ctx.beginPath(); ctx.arc(player.x, player.y, 25, 0, TAU); ctx.stroke();
+      if (dashProg > 0) {
+        ctx.strokeStyle = dashProg >= 1 ? 'rgba(125,249,255,0.85)' : 'rgba(125,249,255,0.45)';
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, 25, -Math.PI / 2, -Math.PI / 2 + TAU * dashProg);
+        ctx.stroke();
+      }
+
+      const odProg = clamp(odCharge / OD_MAX, 0, 1);
+      const odReady = odCharge >= OD_MAX;
+      ctx.lineWidth = 3;
+      // gold throughout, so it reads apart from the blue shield and cyan dash by hue alone
+      ctx.strokeStyle = odCool > 0 ? 'rgba(255,120,90,0.16)' : 'rgba(255,200,90,0.13)';
+      ctx.beginPath(); ctx.arc(player.x, player.y, 30, 0, TAU); ctx.stroke();
+      if (odProg > 0) {
+        const pulse = odReady ? 0.6 + 0.4 * Math.sin(now * 0.009) : 1;
+        ctx.strokeStyle = odReady
+          ? 'rgba(255,232,107,' + (0.55 + 0.45 * pulse).toFixed(2) + ')'
+          : odCool > 0 ? 'rgba(255,140,110,0.5)' : 'rgba(255,196,84,0.62)';
+        if (odReady) { ctx.shadowColor = '#ffe86b'; ctx.shadowBlur = 10 + pulse * 10; }
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, 30, -Math.PI / 2, -Math.PI / 2 + TAU * odProg);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+      // fully charged reads as a golden aura even in a crowded field
+      if (odReady) {
+        const p2 = 0.5 + 0.5 * Math.sin(now * 0.009);
+        drawGlow(player.x, player.y, 46 + p2 * 10, 'rgba(255,232,107,1)', 0.16 + p2 * 0.14);
+      }
     }
 
     // stasis field ring
@@ -3170,13 +3277,22 @@ function draw(now) {
     ctx.font = '600 14px Consolas, monospace';
     ctx.fillText('WAVE ' + wave + '  ·  LV ' + level + '  ·  ' + Math.floor(gameT) + 's SURVIVED', W / 2, H * 0.59);
     if (overT > 0.8) {
-      ctx.globalAlpha = 0.7 + 0.3 * Math.sin(now * 0.005);
-      ctx.fillStyle = '#eaf6ff';
-      ctx.font = '700 17px Consolas, monospace';
-      ctx.fillText(mode === 'campaign'
-        ? (isTouch ? 'TAP — GALAXY MAP' : 'CLICK — RETURN TO GALAXY MAP')
-        : (isTouch ? 'TAP TO RETRY' : 'CLICK OR PRESS R TO RETRY'), W / 2, H * 0.68);
-      ctx.globalAlpha = 1;
+      const rs = overRects();
+      for (let i = 0; i < rs.length; i++) {
+        const r = rs[i], hov = overHover === i;
+        ctx.fillStyle = hov ? 'rgba(63,240,255,0.16)' : 'rgba(120,160,255,0.07)';
+        ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+        ctx.strokeStyle = hov ? 'rgba(63,240,255,0.9)' : 'rgba(140,175,255,0.35)';
+        ctx.lineWidth = hov ? 2 : 1.5;
+        ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
+        ctx.fillStyle = hov ? '#ffffff' : 'rgba(215,232,255,0.85)';
+        ctx.font = '800 15px Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 5);
+      }
+      ctx.fillStyle = 'rgba(150,180,255,0.45)';
+      ctx.font = '600 12px Consolas, monospace';
+      ctx.fillText(isTouch ? 'TAP A BUTTON' : 'R — ' + rs[0].label + '     ESC — HOME', W / 2, rs[0].y + rs[0].h + 26);
     }
   } else if (paused) {
     ctx.fillStyle = 'rgba(2,3,12,0.55)';
@@ -3263,10 +3379,12 @@ addEventListener('keydown', e => {
     }
   }
   if (state === S_END && (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape')) { state = S_MENU; return; }
-  if (state === S_OVER && overT > 0.8 && (e.code === 'KeyR' || e.code === 'Space' || e.code === 'Enter')) {
-    if (mode === 'campaign') { state = S_GALAXY; galaxyHover = -1; setArena(1, true); }
-    else startGame('endless');
-    return;
+  if (state === S_OVER && overT > 0.8) {
+    if (e.code === 'Escape' || e.code === 'KeyH') { overActivate(1); return; }
+    if (e.code === 'KeyR') { overActivate(0); return; }
+    if (e.code === 'ArrowLeft' || e.code === 'KeyA') { overHover = 0; return; }
+    if (e.code === 'ArrowRight' || e.code === 'KeyD') { overHover = 1; return; }
+    if (e.code === 'Space' || e.code === 'Enter') { overActivate(overHover < 0 ? 0 : overHover); return; }
   }
   if (state === S_PLAY) {
     if (choice) {
@@ -3299,6 +3417,21 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 function firstTarget() {
   for (let i = 0; i < PLANETS.length; i++) if (!conquered[i]) return i;
   return PLANETS.length - 1;
+}
+// death screen: retry/continue on the left, always a way home on the right
+function overRects() {
+  const w = 210, h = 46, gap = 18, y = H * 0.66;
+  const x0 = W / 2 - w - gap / 2;
+  return [
+    { x: x0, y, w, h, label: mode === 'campaign' ? 'GALAXY MAP' : 'RETRY' },
+    { x: W / 2 + gap / 2, y, w, h, label: 'HOME' },
+  ];
+}
+function overActivate(i) {
+  if (i === 1) { state = S_MENU; menuHover = 0; overHover = -1; setArena(1, true); return; }
+  if (mode === 'campaign') { state = S_GALAXY; galaxyHover = -1; setArena(1, true); }
+  else startGame('endless');
+  overHover = -1;
 }
 function menuActivate(i) {
   if (i === 0) { state = S_GALAXY; galaxyHover = firstTarget(); }
@@ -3342,8 +3475,11 @@ function uiPress(x, y) {
   if (state === S_END) { state = S_MENU; menuHover = -1; return true; }
   if (state === S_OVER) {
     if (overT > 0.8) {
-      if (mode === 'campaign') { state = S_GALAXY; galaxyHover = -1; setArena(1, true); }
-      else startGame('endless');
+      const rs = overRects();
+      for (let i = 0; i < rs.length; i++) {
+        const r = rs[i];
+        if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { overActivate(i); return true; }
+      }
     }
     return true;
   }
@@ -3382,6 +3518,13 @@ addEventListener('pointermove', e => {
   else if (state === S_GALAXY) {
     const hit = galaxyHitTest(mouse.x, mouse.y);
     galaxyHover = hit ? hit.i : -1;
+  } else if (state === S_OVER) {
+    overHover = -1;
+    const rs = overRects();
+    for (let i = 0; i < rs.length; i++) {
+      const r = rs[i];
+      if (mouse.x >= r.x && mouse.x <= r.x + r.w && mouse.y >= r.y && mouse.y <= r.y + r.h) overHover = i;
+    }
   }
   if (choice) {
     choiceHover = -1;
