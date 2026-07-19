@@ -712,8 +712,8 @@ function dwave() { return mode === 'campaign' ? Math.round(planetIdx * 2.2 + wav
 // arriving at a late planet would otherwise put 2x-hp mobs on wave 1 and stall the run before
 // the player has any upgrades. Each planet restarts gentle and ramps hard within itself.
 function mobHpMul() {
-  if (mode === 'campaign') return Math.pow(1.06, planetIdx) * Math.pow(1.09, Math.max(0, wave - 1));
-  return Math.pow(1.045, Math.max(0, wave - 5));
+  if (mode === 'campaign') return Math.pow(1.05, planetIdx) * Math.pow(1.06, Math.max(0, wave - 1));
+  return Math.pow(1.05, Math.max(0, wave - 5));
 }
 // bosses scale super-exponentially: OD should be a dent in the bar, not the fight
 function bossHp(w, hpMul, packScale) {
@@ -1001,9 +1001,11 @@ function spawnEnemy(type, x, y, opts) {
     e.hp = e.maxHp = 45 + wave * 7;
     e.fireT = 1.5;
   } else {
-    // late-game hp scaling so damage stacking stays honest
-    const bonus = Math.floor(Math.max(0, dwave() - 8) / 5);
-    e.hp = Math.max(1, Math.round((e.hp + bonus) * mobHpMul()));
+    // Purely multiplicative. There used to be a flat +floor((dwave-8)/5) added before the
+    // multiplier, which was the real problem: base mob hp is 1-2, so a flat +3 quadrupled a
+    // chaser and *then* got multiplied again. Trash should stay trash; the curve scales the
+    // types that start tanky.
+    e.hp = Math.max(1, Math.round(e.hp * mobHpMul()));
     e.maxHp = e.hp;
   }
   if (type === 'sniper') e.fireT = rand(1.4, 2.8);
