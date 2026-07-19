@@ -619,7 +619,7 @@ let storyIdx = 0, storyT = 0, storyChain = false;
 let tut = null;
 let planetIdx = 0, planet = null;
 let bossPhase = false, victoryT = 0, expandStep = 0, mopUpT = -1;
-let galaxyHover = -1, menuHover = -1, overHover = -1, pauseHover = -1;
+let galaxyHover = -1, menuHover = -1, overHover = -1, pauseHover = -1, epiHover = false;
 let conquered = [];
 try { conquered = JSON.parse(localStorage.getItem('neovoid_conquered') || '[]') || []; } catch (_) { conquered = []; }
 let score = 0, best = +(localStorage.getItem('neovoid_best') || 0);
@@ -777,6 +777,15 @@ function galaxyPos(i) {
   const rad = (1 - t) * Math.min(W, H) * 0.34 + 60;
   return { x: W / 2 + Math.cos(ang) * rad * 1.35, y: H * 0.54 + Math.sin(ang) * rad * 0.85 };
 }
+function allConquered() {
+  for (let i = 0; i < PLANETS.length; i++) if (!conquered[i]) return false;
+  return true;
+}
+// unlocked once the galaxy is yours — rewatch the epilogue from the map any time
+function epilogueRect() {
+  const w = 216, h = 40;
+  return { x: 30, y: H - 76, w, h };
+}
 function menuRects() {
   const w = 470, h = 62, x = W / 2 - w / 2, y0 = H * 0.46;
   const sy = y0 + (h + 16) * 2;
@@ -808,6 +817,7 @@ const ENDING = [
 ];
 const STORY_CPS = 34; // characters per second reveal
 let storyDeck = STORY; // STORY on the way in, ENDING on the way out
+let epilogueReplay = false; // true when the epilogue was launched from the galaxy map
 function storyFullChars(p) { return p.lines.join('\n').length; }
 function startStory(chain, deck) {
   storyDeck = deck || STORY;
@@ -828,7 +838,16 @@ function advanceStory() {
   else SFX.wave && SFX.wave();
 }
 function endStory() {
-  if (storyDeck === ENDING) { state = S_END; storyDeck = STORY; return; }
+  if (storyDeck === ENDING) {
+    // a replay from the map goes back to the map; the real completion rolls into the
+    // victory screen as before
+    const back = epilogueReplay;
+    epilogueReplay = false;
+    storyDeck = STORY;
+    if (back) { state = S_GALAXY; galaxyHover = -1; }
+    else state = S_END;
+    return;
+  }
   if (storyChain) startTutorial(true);
   else { state = S_MENU; menuHover = 0; }
 }
@@ -1806,7 +1825,7 @@ function update(dt, raw) {
       for (let i = 0; i < PLANETS.length; i++) if (!conquered[i]) { all = false; break; }
       galaxyHover = -1;
       setArena(1, true);
-      if (all) startStory(false, ENDING); // the galaxy is yours — play it out
+      if (all) { epilogueReplay = false; startStory(false, ENDING); } // the galaxy is yours — play it out
       else state = S_GALAXY;
       return;
     }
@@ -3297,6 +3316,23 @@ function draw(now) {
       ctx.font = '600 13px Consolas, monospace';
       ctx.fillText(pl.desc + ' · ' + pl.waves + ' waves · threat ' + '◆'.repeat(Math.min(galaxyHover + 1, 8)), W / 2, H * 0.87 + 22);
     }
+
+    // epilogue replay — only once every world is liberated
+    if (allConquered()) {
+      const r = epilogueRect(), pu = 0.5 + 0.5 * Math.sin(now * 0.004);
+      ctx.fillStyle = epiHover ? 'rgba(255,232,107,0.18)' : 'rgba(255,232,107,0.07)';
+      ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = epiHover ? 'rgba(255,232,107,0.95)' : `rgba(255,232,107,${(0.3 + pu * 0.2).toFixed(2)})`;
+      ctx.lineWidth = epiHover ? 2 : 1.5;
+      ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = epiHover ? '#ffffff' : 'rgba(255,240,180,0.9)';
+      ctx.font = '800 13px Consolas, monospace';
+      ctx.fillText('▶  WATCH EPILOGUE', r.x + r.w / 2, r.y + r.h / 2 + 5);
+      ctx.fillStyle = 'rgba(180,200,255,0.45)';
+      ctx.font = '600 11px Consolas, monospace';
+      ctx.fillText(isTouch ? 'tap to replay' : 'E — replay', r.x + r.w / 2, r.y + r.h + 15);
+    }
   } else if (state === S_END) {
     ctx.fillStyle = '#ffe86b';
     ctx.font = '900 64px Consolas, monospace';
@@ -3442,6 +3478,7 @@ addEventListener('keydown', e => {
   }
   if (state === S_GALAXY) {
     if (e.code === 'Escape') { state = S_MENU; menuHover = 0; return; }
+    if (e.code === 'KeyE' && allConquered()) { epiHover = false; epilogueReplay = true; startStory(false, ENDING); return; }
     let nextIdx = -1;
     for (let i = 0; i < PLANETS.length; i++) if (!conquered[i]) { nextIdx = i; break; }
     const maxSel = nextIdx === -1 ? PLANETS.length - 1 : nextIdx;
@@ -3578,6 +3615,15 @@ function uiPress(x, y) {
     return true;
   }
   if (state === S_GALAXY) {
+    if (allConquered()) {
+      const r = epilogueRect();
+      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+        epiHover = false;
+        epilogueReplay = true;
+        startStory(false, ENDING);
+        return true;
+      }
+    }
     const hit = galaxyHitTest(x, y);
     if (hit && !hit.locked) startGame('campaign', hit.i);
     return true;
@@ -3629,6 +3675,9 @@ addEventListener('pointermove', e => {
   else if (state === S_GALAXY) {
     const hit = galaxyHitTest(mouse.x, mouse.y);
     galaxyHover = hit ? hit.i : -1;
+    const r = epilogueRect();
+    epiHover = allConquered() &&
+      mouse.x >= r.x && mouse.x <= r.x + r.w && mouse.y >= r.y && mouse.y <= r.y + r.h;
   } else if (state === S_OVER) {
     overHover = -1;
     const rs = overRects();
