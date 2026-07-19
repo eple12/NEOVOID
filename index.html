@@ -705,6 +705,26 @@ const PLANETS = [
 ];
 // effective difficulty wave (campaign planets map onto the endless curve)
 function dwave() { return mode === 'campaign' ? Math.round(planetIdx * 2.8) + wave : wave; }
+
+// ---- late-game difficulty curves ----
+// mobs get exponentially tankier — flat damage stacking should stop keeping pace
+function enemyHpMul(w) { return Math.pow(1.045, Math.max(0, w - 5)); }
+// bosses scale super-exponentially: OD should be a dent in the bar, not the fight
+function bossHp(w, hpMul, packScale) {
+  return Math.round((60 + w * 11) * Math.pow(1.062, w) * hpMul * packScale * campaignBossMul());
+}
+// conquest planets pile their own multiplier on top — late sectors are a wall
+function campaignBossMul() { return mode === 'campaign' ? 1 + planetIdx * 0.22 : 1; }
+// boss waves land more often and in bigger packs the deeper you go
+function bossEvery(w) { return w >= 38 ? 2 : w >= 26 ? 3 : w >= 15 ? 4 : 5; }
+function bossCount(w) { return Math.min(5, 1 + Math.floor(Math.max(0, w - 11) / 8)); }
+const BOSS_PACK_SCALE = [1, 0.86, 0.74, 0.64, 0.56];
+// packs arriving faster than you clear them would pile into soup — hold the field at 6
+const BOSS_LIVE_CAP = 6;
+function liveBosses() { let n = 0; for (const e of enemies) if (e.type === 'boss') n++; return n; }
+// ambient pressure: shorter gaps, more per tick, higher ceiling
+function ambientGap(w) { return Math.max(0.12, 1.9 * Math.pow(0.945, w)); }
+function ambientBatch(w) { return 1 + Math.floor(Math.max(0, w - 18) / 10); }
 function galaxyPos(i) {
   const n = PLANETS.length;
   if (i === n - 1) return { x: W / 2, y: H * 0.54 }; // THE CORE sits at the heart
@@ -928,7 +948,8 @@ function spawnEnemy(type, x, y, opts) {
   } else {
     // late-game hp scaling so damage stacking stays honest
     const bonus = Math.floor(Math.max(0, dwave() - 8) / 5);
-    e.hp += bonus; e.maxHp = e.hp;
+    e.hp = Math.max(1, Math.round((e.hp + bonus) * enemyHpMul(dwave())));
+    e.maxHp = e.hp;
   }
   if (type === 'sniper') e.fireT = rand(1.4, 2.8);
   if (opts) Object.assign(e, opts);
@@ -1029,7 +1050,7 @@ function spawnBoss(def, x, y, hpScale) {
   e.variant = def.v;
   e.color = def.color;
   const w = dwave();
-  e.hp = e.maxHp = Math.round((54 + w * 8.5 + w * w * 0.62) * def.hpMul * hpScale);
+  e.hp = e.maxHp = bossHp(w, def.hpMul, hpScale);
   e.phase = 'roam'; e.phaseT = 2.2; e.chargeA = 0; e.charges = 0;
   e.spawnCd = 2.5; e.spA = rand(0, TAU); e.orbA = rand(0, TAU);
   e.burstT = 2.5; e.bursting = false;
@@ -1229,7 +1250,7 @@ function updateDirector(dt) {
         if (wave > planet.waves) {
           bossPhase = true;
           const list = planet.boss;
-          const hpS = [1, 0.72, 0.6, 0.5, 0.42][list.length - 1] || 0.42;
+          const hpS = BOSS_PACK_SCALE[list.length - 1] || BOSS_PACK_SCALE[4];
           const names = list.map(v => BOSSES.find(b => b.v === v).name).join(' + ');
           banner = { txt: names + (list.length > 1 ? ' AWAKEN' : ' AWAKENS'), sub: 'destroy to conquer ' + planet.name, t: 2.4, max: 2.4, color: planet.color };
           SFX.boss();
@@ -1259,9 +1280,12 @@ function updateDirector(dt) {
     if (!bossPhase || mopUpT > 0) {
       spawnT -= dt;
       if (spawnT <= 0) {
-        spawnT = Math.max(0.35, 1.9 - dwave() * 0.08) * (bossPhase ? 2.4 : 1);
-        const cap = bossPhase ? 10 : Math.min(18 + dwave() * 3, 70);
-        if (wave >= 1 && enemies.length < cap) ambientSpawn();
+        const w = dwave();
+        spawnT = ambientGap(w) * (bossPhase ? 1.8 : 1);
+        // late planets keep the adds coming through the boss fight instead of going quiet
+        const cap = bossPhase ? 8 + planetIdx * 2 : Math.min(18 + w * 3.5, 95);
+        const batch = ambientBatch(w);
+        if (wave >= 1) for (let i = 0; i < batch && enemies.length < cap; i++) ambientSpawn();
       }
     }
 
@@ -1269,19 +1293,20 @@ function updateDirector(dt) {
     waveT -= dt;
     if (waveT <= 0) {
       wave++;
-      waveT = 26;
-      if (wave % 5 === 0) {
-        const def = BOSSES[bossOrder[bossIdx % BOSSES.length]];
-        bossIdx++;
-        banner = { txt: def.name + ' DETECTED', sub: 'destroy the core', t: 2.2, max: 2.2, color: def.color };
+      waveT = Math.max(16, 26 - wave * 0.25);
+      if (wave % bossEvery(wave) === 0 && liveBosses() < BOSS_LIVE_CAP) {
+        // walk the shuffled order so a pack is always distinct bosses, never dupes
+        const n = Math.min(bossCount(wave), BOSS_LIVE_CAP - liveBosses()), defs = [];
+        for (let i = 0; i < n; i++) defs.push(BOSSES[bossOrder[(bossIdx + i) % BOSSES.length]]);
+        bossIdx += n;
+        const scale = BOSS_PACK_SCALE[n - 1];
+        banner = {
+          txt: defs.map(d => d.name).join(' + ') + ' DETECTED',
+          sub: n > 1 ? 'destroy all ' + n + ' cores' : 'destroy the core',
+          t: 2.4, max: 2.4, color: defs[0].color,
+        };
         SFX.boss();
-        const p = edgeSpawnPos();
-        spawnBoss(def, p.x, p.y, 1);
-        if (wave >= 20) {
-          const d2 = pick(BOSSES.filter(b => b !== def));
-          const p2 = edgeSpawnPos();
-          spawnBoss(d2, p2.x, p2.y, 0.7);
-        }
+        for (const d of defs) { const p = edgeSpawnPos(); spawnBoss(d, p.x, p.y, scale); }
       } else {
         banner = { txt: 'WAVE ' + wave, sub: null, t: 1.6, max: 1.6, color: COL.player };
         if (wave > 1) SFX.wave();
@@ -1298,8 +1323,10 @@ function updateDirector(dt) {
     }
     spawnT -= dt;
     if (spawnT <= 0) {
-      spawnT = Math.max(0.35, 1.9 - wave * 0.08);
-      if (enemies.length < Math.min(18 + wave * 3, 70)) ambientSpawn();
+      spawnT = ambientGap(wave);
+      const cap = Math.min(18 + wave * 3, 90);
+      const batch = ambientBatch(wave);
+      for (let i = 0; i < batch && enemies.length < cap; i++) ambientSpawn();
     }
   }
 }
@@ -1326,16 +1353,19 @@ function ambientSpawn() {
   if (w >= 12) pool.push('hunter');
   const p = edgeSpawnPos();
   const e = spawnEnemy(pick(pool), p.x, p.y);
-  const ec = clamp((w - 6) * 0.03, 0, 0.35);
+  const ec = clamp((w - 6) * 0.035, 0, 0.6);
   if (Math.random() < ec) makeElite(e);
 }
 function burstSpawn() {
   const kind = wave === 1 ? 0 : randI(0, 2);
   const { x0, y0, x1, y1 } = arena;
   const w = dwave();
+  // the wave burst lands on top of ambient spawns — leave headroom so the field stays drawable
+  const room = Math.max(0, 130 - enemies.length);
+  if (room === 0) return;
   if (kind === 0) {
     // ring around player
-    const n = Math.min(4 + w, 14), R = 330;
+    const n = Math.min(4 + Math.round(w * 1.4), 26, room), R = 330;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * TAU;
       const x = clamp(player.x + Math.cos(a) * R, x0 + 30, x1 - 30);
@@ -1344,7 +1374,7 @@ function burstSpawn() {
     }
   } else if (kind === 1) {
     // wall line of wanderers
-    const n = Math.min(4 + w, 12), top = Math.random() < 0.5;
+    const n = Math.min(4 + Math.round(w * 1.2), 22, room), top = Math.random() < 0.5;
     for (let i = 0; i < n; i++)
       spawnEnemy('wanderer', x0 + (i + 0.5) / n * (x1 - x0), top ? y0 + 40 : y1 - 40);
   } else {
@@ -2778,7 +2808,13 @@ function draw(now) {
     ctx.globalAlpha = a;
     ctx.textAlign = 'center';
     ctx.fillStyle = banner.color;
-    ctx.font = '900 44px Consolas, monospace';
+    // a five-boss pack title is long — shrink until it fits rather than bleeding off-screen
+    let bfs = 44;
+    ctx.font = '900 ' + bfs + 'px Consolas, monospace';
+    while (bfs > 16 && ctx.measureText(banner.txt).width > W * 0.9) {
+      bfs -= 2;
+      ctx.font = '900 ' + bfs + 'px Consolas, monospace';
+    }
     ctx.shadowColor = banner.color; ctx.shadowBlur = 24;
     ctx.fillText(banner.txt, W / 2, H * 0.3);
     ctx.shadowBlur = 0;
