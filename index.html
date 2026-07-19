@@ -211,8 +211,12 @@ const SFX = {
 // ---- procedural music (16-step sequencer, A minor) ----
 const BPM = 138, STEP = 60 / BPM / 2; // 8th notes
 const bassPat = [0, 0, null, 0, 0, null, 3, null, 0, 0, null, 0, 5, null, 3, 2];
+// boss mode: relentless driving ostinato with tritone menace
+const bossBass = [0, 0, 0, 0, -2, -2, 6, 6, 0, 0, 0, 0, 5, 5, 6, 6];
 const arpScale = [0, 3, 5, 7, 10, 12, 15];
+const bossArp = [0, 6, 7, 11, 12, 18];
 let musicStep = 0, musicNext = 0, musicTimer = null;
+let bossActive = false, bossMix = 0; // bossMix eases 0→1 so the switch isn't jarring
 
 function startMusic() {
   musicNext = AC.currentTime + 0.1;
@@ -222,24 +226,29 @@ function startMusic() {
 function scheduleMusic() {
   if (!AC || muted) return;
   if (musicNext < AC.currentTime - 0.2) musicNext = AC.currentTime; // tab-throttle catchup
-  const intensity = state === S_PLAY ? clamp(mult / 25, 0.12, 1) : 0.1;
+  // ease toward/away from the boss theme
+  bossMix += ((bossActive ? 1 : 0) - bossMix) * 0.08;
+  const bm = bossMix;
+  const base = state === S_PLAY ? clamp(mult / 25, 0.12, 1) : 0.1;
+  const intensity = Math.max(base, bm); // boss pins the mix wide open
   while (musicNext < AC.currentTime + 0.12) {
     const t = musicNext, s = musicStep;
-    // bass
-    const semi = bassPat[s];
+    // bass — boss swaps to a driving tritone ostinato an octave lower
+    const semi = bm > 0.5 ? bossBass[s] : bassPat[s];
     if (semi !== null) {
       const osc = AC.createOscillator(); osc.type = 'sawtooth';
-      osc.frequency.value = 55 * Math.pow(2, semi / 12);
+      osc.frequency.value = (bm > 0.5 ? 41.2 : 55) * Math.pow(2, semi / 12);
       const f = AC.createBiquadFilter(); f.type = 'lowpass';
-      f.frequency.value = 220 + intensity * 1400;
+      f.frequency.value = 220 + intensity * 1400 + bm * 700;
+      f.Q.value = 1 + bm * 6; // resonant snarl under the boss
       const g = AC.createGain();
-      g.gain.setValueAtTime(0.22, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + STEP * 0.95);
+      g.gain.setValueAtTime(0.22 + bm * 0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + STEP * (bm > 0.5 ? 0.7 : 0.95));
       osc.connect(f); f.connect(g); g.connect(musicBus);
       osc.start(t); osc.stop(t + STEP);
     }
-    // kick on beats
-    if (s % 4 === 0) {
+    // kick — boss adds a driving offbeat kick
+    if (s % 4 === 0 || (bm > 0.5 && s % 4 === 2)) {
       const osc = AC.createOscillator(); osc.type = 'sine';
       osc.frequency.setValueAtTime(110, t);
       osc.frequency.exponentialRampToValueAtTime(38, t + 0.12);
@@ -249,8 +258,8 @@ function scheduleMusic() {
       osc.connect(g); g.connect(musicBus);
       osc.start(t); osc.stop(t + 0.16);
     }
-    // hats offbeat
-    if (s % 4 === 2 && noiseBuf) {
+    // hats — double-time during the boss
+    if ((bm > 0.5 ? s % 2 === 1 : s % 4 === 2) && noiseBuf) {
       const src = AC.createBufferSource(); src.buffer = noiseBuf;
       const f = AC.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 8000;
       const g = AC.createGain();
@@ -259,12 +268,35 @@ function scheduleMusic() {
       src.connect(f); f.connect(g); g.connect(musicBus);
       src.start(t); src.stop(t + 0.06);
     }
-    // arp sparkle
-    if (s % 2 === 1 && Math.random() < 0.35 + intensity * 0.5) {
-      const osc = AC.createOscillator(); osc.type = 'triangle';
-      osc.frequency.value = 220 * Math.pow(2, (pick(arpScale) + 12) / 12);
+    // boss-only: snare crack on the backbeat + tritone alarm stab each bar
+    if (bm > 0.5 && noiseBuf && s % 8 === 4) {
+      const src = AC.createBufferSource(); src.buffer = noiseBuf;
+      const f = AC.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1900; f.Q.value = 0.8;
       const g = AC.createGain();
-      g.gain.setValueAtTime(0.05 + intensity * 0.06, t);
+      g.gain.setValueAtTime(0.24 * bm, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      src.connect(f); f.connect(g); g.connect(musicBus);
+      src.start(t); src.stop(t + 0.18);
+    }
+    if (bm > 0.5 && s === 0) {
+      for (const iv of [0, 6]) { // root + tritone = dread
+        const osc = AC.createOscillator(); osc.type = 'square';
+        osc.frequency.value = 220 * Math.pow(2, iv / 12);
+        const f = AC.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1400;
+        const g = AC.createGain();
+        g.gain.setValueAtTime(0.07 * bm, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + STEP * 3);
+        osc.connect(f); f.connect(g); g.connect(musicBus); g.connect(delaySend);
+        osc.start(t); osc.stop(t + STEP * 3.2);
+      }
+    }
+    // arp — sparkle normally, tense chromatic figure under the boss
+    if (s % 2 === 1 && Math.random() < 0.35 + intensity * 0.5) {
+      const osc = AC.createOscillator(); osc.type = bm > 0.5 ? 'sawtooth' : 'triangle';
+      const scale = bm > 0.5 ? bossArp : arpScale;
+      osc.frequency.value = 220 * Math.pow(2, (pick(scale) + 12) / 12);
+      const g = AC.createGain();
+      g.gain.setValueAtTime((0.05 + intensity * 0.06) * (bm > 0.5 ? 0.7 : 1), t);
       g.gain.exponentialRampToValueAtTime(0.001, t + STEP * 1.8);
       osc.connect(g); g.connect(musicBus); g.connect(delaySend);
       osc.start(t); osc.stop(t + STEP * 2);
@@ -732,6 +764,7 @@ const TUT_STEPS = [
   { key: 'aim',   title: 'AIM & FIRE',    hint: () => isTouch ? 'right thumbstick — aim & fire · clear the drones' : (aimDevice === 'keys' ? 'ARROW KEYS aim & auto-fire · clear the drones' : 'MOUSE aims, hold LEFT-CLICK to fire · clear the drones') },
   { key: 'gem',   title: 'GEMS & LEVELS', hint: () => 'gather the gems — fill the bar, then choose an upgrade' },
   { key: 'dash',  title: 'PHASE DASH',    hint: () => isTouch ? 'third finger — dash (brief invulnerability)' : 'SPACE — dash through danger (brief invulnerability)' },
+  { key: 'od',    title: 'OVERDRIVE',     hint: () => isTouch ? 'meter is FULL — tap the dial to unleash overdrive' : 'meter is FULL — press Q (or RIGHT-CLICK) to unleash overdrive' },
   { key: 'done',  title: 'READY',         hint: () => 'you are ready, pilot. good hunting.' },
 ];
 function startTutorial(fromIntro) {
@@ -783,6 +816,18 @@ function updateTutorial(dt) {
   } else if (step.key === 'dash') {
     if (player.dashT > 0) tut.dashed = true;
     if (tut.dashed && player.dashCd < 1.0) tutNext();
+  } else if (step.key === 'od') {
+    // hand the player a full meter and some targets to melt
+    if (!tut.odPrimed) {
+      tut.odPrimed = true;
+      odCharge = OD_MAX; odReadyPulse = 1;
+      SFX.odReady();
+      tutSpawnTargets();
+      tutSpawnTargets();
+    }
+    if (odCharge < OD_MAX && odActive <= 0) { odCharge = OD_MAX; } // keep it topped up until they use it
+    if (odActive > 0) tut.odUsed = true;
+    if (tut.odUsed && odActive <= 0) tutNext();
   } else if (step.key === 'done') {
     tut.doneT += dt;
     if (!tut.celebrated) {
@@ -1607,6 +1652,8 @@ function update(dt, raw) {
   odFlash = Math.max(0, odFlash - raw * 2);
   odReadyPulse = Math.max(0, odReadyPulse - raw * 1.2);
 
+  if (state !== S_PLAY) bossActive = false; // drop the boss theme outside combat
+
   if (state === S_STORY) {
     storyT += raw;
     if (Math.random() < dt * 2)
@@ -1655,6 +1702,8 @@ function update(dt, raw) {
   }
 
   gameT += dt;
+  // a live boss on the field swings the soundtrack into its menacing variant
+  bossActive = enemies.some(e => e.type === 'boss');
   if (odActive > 0) {
     odActive = Math.max(0, odActive - dt);
     if (player.alive && Math.random() < dt * 40)
@@ -2666,8 +2715,8 @@ function draw(now) {
     ctx.font = '600 11px Consolas, monospace';
     ctx.fillText('DASH', dx0, dy0 - 6);
 
-    // OVERDRIVE meter (radial dial, bottom-right)
-    if (mode !== 'tutorial') {
+    // OVERDRIVE meter (radial dial, bottom-right) — shown in the tutorial once it's taught
+    if (mode !== 'tutorial' || (tut && TUT_STEPS[tut.step].key === 'od')) {
       const ob = odButtonRect(), ready = odCharge >= OD_MAX, frac = odActive > 0 ? odActive / OD_DUR : odCharge / OD_MAX;
       const pulse = ready && odActive <= 0 ? (0.5 + 0.5 * Math.sin(now * 0.008)) : 0;
       ctx.save();
@@ -3179,6 +3228,7 @@ addEventListener('keydown', e => {
       if (e.code === 'Escape') { endTutorial(); return; }
       if (TUT_STEPS[tut.step].key === 'done' && tut.doneT > 0.5 && (e.code === 'Space' || e.code === 'Enter')) { endTutorial(); return; }
       if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') tryDash();
+      if (e.code === 'KeyQ' || e.code === 'KeyE') activateOverdrive();
       return;
     }
     if (e.code === 'KeyP' || e.code === 'Escape') paused = !paused;
