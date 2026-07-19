@@ -729,8 +729,10 @@ const BOSS_PACK_SCALE = [1, 0.86, 0.74, 0.64, 0.56];
 const BOSS_LIVE_CAP = 6;
 function liveBosses() { let n = 0; for (const e of enemies) if (e.type === 'boss') n++; return n; }
 // ambient pressure: shorter gaps, more per tick, higher ceiling
-function ambientGap(w) { return Math.max(0.12, 1.9 * Math.pow(0.945, w)); }
-function ambientBatch(w) { return 1 + Math.floor(Math.max(0, w - 18) / 10); }
+function ambientGap(w) { return Math.max(0.26, 1.9 * Math.pow(0.958, w)); }
+function ambientBatch(w) { return 1 + Math.floor(Math.max(0, w - 24) / 12); }
+// wanderers drift rather than chase — they shouldn't outpace the enemies that do
+const WANDER_SPD = 74;
 function galaxyPos(i) {
   const n = PLANETS.length;
   if (i === n - 1) return { x: W / 2, y: H * 0.54 }; // THE CORE sits at the heart
@@ -1299,7 +1301,7 @@ function updateDirector(dt) {
         const w = dwave();
         spawnT = ambientGap(w) * (bossPhase ? 1.8 : 1);
         // late planets keep the adds coming through the boss fight instead of going quiet
-        const cap = bossPhase ? 8 + planetIdx * 2 : Math.min(18 + w * 3.5, 95);
+        const cap = bossPhase ? 7 + planetIdx * 1.5 : Math.min(14 + w * 2.4, 72);
         const batch = ambientBatch(w);
         if (wave >= 1) for (let i = 0; i < batch && enemies.length < cap; i++) ambientSpawn();
       }
@@ -1340,7 +1342,7 @@ function updateDirector(dt) {
     spawnT -= dt;
     if (spawnT <= 0) {
       spawnT = ambientGap(wave);
-      const cap = Math.min(18 + wave * 3, 90);
+      const cap = Math.min(14 + wave * 2.2, 68);
       const batch = ambientBatch(wave);
       for (let i = 0; i < batch && enemies.length < cap; i++) ambientSpawn();
     }
@@ -1377,11 +1379,11 @@ function burstSpawn() {
   const { x0, y0, x1, y1 } = arena;
   const w = dwave();
   // the wave burst lands on top of ambient spawns — leave headroom so the field stays drawable
-  const room = Math.max(0, 130 - enemies.length);
+  const room = Math.max(0, 95 - enemies.length);
   if (room === 0) return;
   if (kind === 0) {
     // ring around player
-    const n = Math.min(4 + Math.round(w * 1.4), 26, room), R = 330;
+    const n = Math.min(4 + Math.round(w * 0.9), 18, room), R = 330;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * TAU;
       const x = clamp(player.x + Math.cos(a) * R, x0 + 30, x1 - 30);
@@ -1390,7 +1392,7 @@ function burstSpawn() {
     }
   } else if (kind === 1) {
     // wall line of wanderers
-    const n = Math.min(4 + Math.round(w * 1.2), 22, room), top = Math.random() < 0.5;
+    const n = Math.min(4 + Math.round(w * 0.8), 16, room), top = Math.random() < 0.5;
     for (let i = 0; i < n; i++)
       spawnEnemy('wanderer', x0 + (i + 0.5) / n * (x1 - x0), top ? y0 + 40 : y1 - 40);
   } else {
@@ -2003,7 +2005,8 @@ function update(dt, raw) {
       }
     } else if (e.type === 'wanderer') {
       if (Math.abs(e.vx) < 5 && Math.abs(e.vy) < 5) {
-        const a = rand(0, TAU); e.vx = Math.cos(a) * 95 * (e.spdMul || 1); e.vy = Math.sin(a) * 95 * (e.spdMul || 1);
+        const a = rand(0, TAU), s0 = WANDER_SPD * (e.spdMul || 1);
+        e.vx = Math.cos(a) * s0; e.vy = Math.sin(a) * s0;
       }
       // movement clamps position to the wall, so the old strict `<` never fired and
       // wanderers pinned themselves into corners forever — test against the clamp itself
@@ -2018,9 +2021,18 @@ function update(dt, raw) {
           (e.x <= arena.x0 + e.r + 2 || e.x >= arena.x1 - e.r - 2 ||
            e.y <= arena.y0 + e.r + 2 || e.y >= arena.y1 - e.r - 2)) {
         e.bounceT = 0.35;
-        const sp = Math.hypot(e.vx, e.vy) || 95 * (e.spdMul || 1);
+        const sp = Math.hypot(e.vx, e.vy) || WANDER_SPD * (e.spdMul || 1);
         const na = Math.atan2(e.vy, e.vx) + rand(-0.5, 0.5);
         e.vx = Math.cos(na) * sp; e.vy = Math.sin(na) * sp;
+      }
+      // every other type steers toward a target speed, so knockback washes out. Wanderers
+      // just keep whatever velocity they have, so sustained fire was compounding them up
+      // past 350 — let the shove land, then bleed it back to cruising speed.
+      const wcap = WANDER_SPD * (e.spdMul || 1);
+      const wsp = Math.hypot(e.vx, e.vy);
+      if (wsp > wcap) {
+        const k = Math.max(wcap, wsp * Math.exp(-2.5 * dt));
+        e.vx = e.vx / wsp * k; e.vy = e.vy / wsp * k;
       }
     } else if (e.type === 'splitter') {
       const sp = 72 * (e.spdMul || 1);
