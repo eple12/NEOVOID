@@ -633,8 +633,11 @@ let level = 1, xp = 0, xpNeed = 10, pendingLevels = 0;
 let xpShown = 0, xpFlash = 0; // animated xp bar
 let choice = null, choiceHover = -1;
 // OVERDRIVE — chargeable clutch ultimate for hard fights (CORE, boss phases)
-let odCharge = 0, odActive = 0, odFlash = 0, odReadyPulse = 0;
-const OD_MAX = 100, OD_DUR = 5;
+let odCharge = 0, odActive = 0, odFlash = 0, odReadyPulse = 0, odCool = 0;
+const OD_MAX = 100, OD_DUR = 2.6;
+const OD_IFRAMES = 0.8; // the panic-button escape window — after this you're mortal again
+// the gem pile OD leaves behind used to refund the next OD almost instantly — damp the refill
+const OD_COOL = 4.5, OD_COOL_RATE = 0.25;
 
 const player = {
   x: 0, y: 0, vx: 0, vy: 0, ang: 0, r: 10,
@@ -649,9 +652,9 @@ let bossOrder = [], bossIdx = 0;
 
 // derived stats from upgrades
 const stat = {
-  fireInt:   () => 0.105 * Math.pow(0.88, player.up.rapid || 0) * (odActive > 0 ? 0.45 : 1),
-  streams:   () => 1 + (player.up.multi || 0) + (odActive > 0 ? 2 : 0),
-  dmg:       () => (1 + (player.up.power || 0)) * (odActive > 0 ? 2 : 1),
+  fireInt:   () => 0.105 * Math.pow(0.88, player.up.rapid || 0) * (odActive > 0 ? 0.8 : 1),
+  streams:   () => 1 + (player.up.multi || 0) + (odActive > 0 ? 1 : 0),
+  dmg:       () => (1 + (player.up.power || 0)) * (odActive > 0 ? 1.3 : 1),
   pierce:    () => player.up.pierce || 0,
   accel:     () => 2600 * Math.pow(1.12, player.up.speed || 0),
   dashCdMax: () => 1.4 * Math.pow(0.72, player.up.dash || 0),
@@ -774,7 +777,7 @@ function startTutorial(fromIntro) {
   setArena(0.9, true);
   score = 0; mult = 1; lives = 3; wave = 0; waveT = 999; spawnT = 999; gameT = 0;
   level = 1; xp = 0; xpNeed = 8; pendingLevels = 0; xpShown = 0; xpFlash = 0;
-  odCharge = 0; odActive = 0; odFlash = 0; odReadyPulse = 0;
+  odCharge = 0; odActive = 0; odFlash = 0; odReadyPulse = 0; odCool = 0;
   gemStreak = 0; shake = 0; hitStop = 0;
   choice = null; choiceHover = -1;
   bullets = []; enemies = []; ebullets = []; gems = []; hearts = [];
@@ -1026,7 +1029,7 @@ function spawnBoss(def, x, y, hpScale) {
   e.variant = def.v;
   e.color = def.color;
   const w = dwave();
-  e.hp = e.maxHp = Math.round((45 + w * 7 + w * w * 0.5) * def.hpMul * hpScale);
+  e.hp = e.maxHp = Math.round((54 + w * 8.5 + w * w * 0.62) * def.hpMul * hpScale);
   e.phase = 'roam'; e.phaseT = 2.2; e.chargeA = 0; e.charges = 0;
   e.spawnCd = 2.5; e.spA = rand(0, TAU); e.orbA = rand(0, TAU);
   e.burstT = 2.5; e.bursting = false;
@@ -1047,20 +1050,23 @@ function updateBoss(e, dt, tx, ty) {
     e.vy += ((dy / d) * sp - e.vy) * Math.min(1, 1.2 * dt);
     e.fireT -= dt;
     if (e.fireT <= 0 && player.alive) {
-      e.fireT = Math.max(1.4, 2.5 - dwave() * 0.05);
+      e.fireT = Math.max(1.0, 2.0 - dwave() * 0.05);
       e.burst = (e.burst || 0) + 1;
       SFX.eShoot();
       if (e.burst % 2 === 0) {
-        const n = 14, off = rand(0, TAU);
+        // twin counter-rotating rings — you have to move through the gaps, not stand in them
+        const n = 16, off = rand(0, TAU);
         for (let j = 0; j < n; j++) {
           const a = off + (j / n) * TAU;
-          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 165, vy: Math.sin(a) * 165, life: 7, r: 5 });
+          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 175, vy: Math.sin(a) * 175, life: 7, r: 5 });
+          const a2 = off - (j / n) * TAU + Math.PI / n;
+          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a2) * 110, vy: Math.sin(a2) * 110, life: 7, r: 5 });
         }
       } else {
         const aim = Math.atan2(dy, dx);
-        for (let j = -1; j <= 1; j++) {
-          const a = aim + j * 0.16;
-          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 240, vy: Math.sin(a) * 240, life: 7, r: 5 });
+        for (let j = -2; j <= 2; j++) {
+          const a = aim + j * 0.15;
+          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 265, vy: Math.sin(a) * 265, life: 7, r: 5 });
         }
       }
     }
@@ -1071,7 +1077,7 @@ function updateBoss(e, dt, tx, ty) {
       e.vx += ((dx / d) * 55 - e.vx) * Math.min(1, 1.2 * dt);
       e.vy += ((dy / d) * 55 - e.vy) * Math.min(1, 1.2 * dt);
       if (e.phaseT <= 0) {
-        e.phase = 'aim'; e.phaseT = 0.75;
+        e.phase = 'aim'; e.phaseT = 0.6;
         e.chargeA = Math.atan2(dy, dx);
         SFX.charge();
       }
@@ -1079,24 +1085,32 @@ function updateBoss(e, dt, tx, ty) {
       e.vx *= Math.exp(-8 * dt); e.vy *= Math.exp(-8 * dt);
       if (e.phaseT <= 0) { e.phase = 'charge'; e.phaseT = 1.6; e.charges++; }
     } else if (e.phase === 'charge') {
-      e.vx = Math.cos(e.chargeA) * 540;
-      e.vy = Math.sin(e.chargeA) * 540;
+      e.vx = Math.cos(e.chargeA) * 610;
+      e.vy = Math.sin(e.chargeA) * 610;
       if (Math.random() < dt * 40) addPart(e.x, e.y, rand(-50, 50), rand(-50, 50), 0.3, e.color, 2.5);
       const hitWall =
         (e.x <= arena.x0 + e.r + 10 && e.vx < 0) || (e.x >= arena.x1 - e.r - 10 && e.vx > 0) ||
         (e.y <= arena.y0 + e.r + 10 && e.vy < 0) || (e.y >= arena.y1 - e.r - 10 && e.vy > 0);
       if (hitWall || e.phaseT <= 0) {
         e.phase = 'stun';
-        e.phaseT = e.charges % 3 === 0 ? 1.7 : 0.8;
+        e.phaseT = e.charges % 3 === 0 ? 1.25 : 0.5;
         e.vx = e.vy = 0;
         shake = Math.min(shake + 8, 26);
         shockGrid(e.x, e.y, 260, 380);
         addShockwave(e.x, e.y, 140, e.color);
+        // slamming into the wall throws shrapnel — punting the punish window costs you space
+        if (player.alive) {
+          const off = rand(0, TAU);
+          for (let j = 0; j < 8; j++) {
+            const a = off + (j / 8) * TAU;
+            ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 205, vy: Math.sin(a) * 205, life: 5, r: 5 });
+          }
+        }
         SFX.explode(false);
       }
     } else { // stun
       e.vx *= Math.exp(-6 * dt); e.vy *= Math.exp(-6 * dt);
-      if (e.phaseT <= 0) { e.phase = 'roam'; e.phaseT = 2.0; }
+      if (e.phaseT <= 0) { e.phase = 'roam'; e.phaseT = 1.5; }
     }
 
   } else if (v === 'hive') {
@@ -1106,8 +1120,8 @@ function updateBoss(e, dt, tx, ty) {
     e.vy += ((cy / cd) * 30 - e.vy) * Math.min(1, 0.8 * dt);
     e.spawnCd -= dt;
     if (e.spawnCd <= 0 && enemies.length < 45) {
-      e.spawnCd = Math.max(2.2, 3.4 - dwave() * 0.05);
-      for (let i = 0; i < 2; i++) {
+      e.spawnCd = Math.max(1.5, 2.6 - dwave() * 0.05);
+      for (let i = 0; i < 3; i++) {
         const a = rand(0, TAU);
         spawnEnemy('shard', e.x + Math.cos(a) * e.r, e.y + Math.sin(a) * e.r,
           { vx: Math.cos(a) * 160, vy: Math.sin(a) * 160 });
@@ -1117,11 +1131,11 @@ function updateBoss(e, dt, tx, ty) {
     }
     e.fireT -= dt;
     if (e.fireT <= 0 && player.alive) {
-      e.fireT = 4;
+      e.fireT = 2.8;
       const off = rand(0, TAU);
-      for (let j = 0; j < 9; j++) {
-        const a = off + (j / 9) * TAU;
-        ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 115, vy: Math.sin(a) * 115, life: 7, r: 5 });
+      for (let j = 0; j < 13; j++) {
+        const a = off + (j / 13) * TAU;
+        ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 135, vy: Math.sin(a) * 135, life: 7, r: 5 });
       }
       SFX.eShoot();
     }
@@ -1137,17 +1151,18 @@ function updateBoss(e, dt, tx, ty) {
     e.burstT -= dt;
     if (e.burstT <= 0) {
       e.bursting = !e.bursting;
-      e.burstT = e.bursting ? 3.0 : 1.6;
+      e.burstT = e.bursting ? 3.6 : 1.1;
     }
     if (e.bursting && player.alive) {
       e.fireT -= dt;
       if (e.fireT <= 0) {
-        e.fireT = 0.12;
-        e.spA += 0.42;
-        for (const k of [0, Math.PI]) {
+        e.fireT = 0.13;
+        e.spA += 0.38;
+        // three arms instead of two — the safe wedge is much tighter
+        for (const k of [0, TAU / 3, 2 * TAU / 3]) {
           ebullets.push({
             x: e.x, y: e.y,
-            vx: Math.cos(e.spA + k) * 145, vy: Math.sin(e.spA + k) * 145,
+            vx: Math.cos(e.spA + k) * 160, vy: Math.sin(e.spA + k) * 160,
             life: 6, r: 5,
           });
         }
@@ -1161,10 +1176,10 @@ function updateBoss(e, dt, tx, ty) {
       e.vy += ((dy / d) * 30 - e.vy) * Math.min(1, dt);
       e.fireT -= dt;
       if (e.fireT <= 0 && player.alive) {
-        e.fireT = 1.0;
+        e.fireT = 0.72;
         const aim = Math.atan2(player.y - e.y, player.x - e.x);
-        for (const j of [-0.1, 0.1]) {
-          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(aim + j) * 230, vy: Math.sin(aim + j) * 230, life: 7, r: 5 });
+        for (const j of [-0.22, 0, 0.22]) {
+          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(aim + j) * 250, vy: Math.sin(aim + j) * 250, life: 7, r: 5 });
         }
         SFX.eShoot();
       }
@@ -1190,9 +1205,9 @@ function updateBoss(e, dt, tx, ty) {
         addShockwave(e.x, e.y, 160, e.color);
         shockGrid(e.x, e.y, 260, 340);
         const off = rand(0, TAU);
-        for (let j = 0; j < 10; j++) {
-          const a = off + (j / 10) * TAU;
-          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 185, vy: Math.sin(a) * 185, life: 6, r: 5 });
+        for (let j = 0; j < 13; j++) {
+          const a = off + (j / 13) * TAU;
+          ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * 200, vy: Math.sin(a) * 200, life: 6, r: 5 });
         }
         SFX.eShoot();
       }
@@ -1522,6 +1537,7 @@ function assistAim(a) {
 
 function chargeOverdrive(amt) {
   if (odActive > 0) return;
+  if (odCool > 0) amt *= OD_COOL_RATE; // sweeping up your own kill's gems shouldn't refund the ultimate
   const was = odCharge;
   odCharge = Math.min(OD_MAX, odCharge + amt);
   if (was < OD_MAX && odCharge >= OD_MAX) { odReadyPulse = 1; SFX.odReady(); }
@@ -1529,12 +1545,15 @@ function chargeOverdrive(amt) {
 function activateOverdrive() {
   if (state !== S_PLAY || !player.alive || odActive > 0 || odCharge < OD_MAX) return;
   odCharge = 0; odActive = OD_DUR; odFlash = 0.25;
-  player.invuln = Math.max(player.invuln, OD_DUR + 0.2);
+  player.invuln = Math.max(player.invuln, OD_IFRAMES);
   shake = Math.min(shake + 14, 26);
   addShockwave(player.x, player.y, 260, COL.gem);
   addShockwave(player.x, player.y, 180, '#ffffff');
   shockGrid(player.x, player.y, 460, 620);
-  ebullets.length = 0; // wipe incoming fire
+  // clear point-blank fire only — distant walls still close in, so OD buys space, not a reset
+  for (let i = ebullets.length - 1; i >= 0; i--) {
+    if (dist2(ebullets[i].x, ebullets[i].y, player.x, player.y) < 330 * 330) ebullets.splice(i, 1);
+  }
   for (let i = 0; i < 40; i++) { const a = (i / 40) * TAU; addPart(player.x, player.y, Math.cos(a) * 380, Math.sin(a) * 380, 0.5, COL.gem, 2.5); }
   SFX.odOn();
 }
@@ -1589,7 +1608,7 @@ function startGame(m, pIdx) {
   wave = 0; waveT = mode === 'campaign' ? 3 : 0.01; spawnT = 2.2; gameT = 0;
   gemStreak = 0; shake = 0; hitStop = 0;
   level = 1; xp = 0; xpNeed = 10; pendingLevels = 0; xpShown = 0; xpFlash = 0;
-  odCharge = 0; odActive = 0; odFlash = 0; odReadyPulse = 0;
+  odCharge = 0; odActive = 0; odFlash = 0; odReadyPulse = 0; odCool = 0;
   choice = null; choiceHover = -1;
   bullets = []; enemies = []; ebullets = []; gems = []; hearts = [];
   parts = []; floaters = []; shockwaves = []; ghosts = [];
@@ -1708,8 +1727,8 @@ function update(dt, raw) {
     odActive = Math.max(0, odActive - dt);
     if (player.alive && Math.random() < dt * 40)
       addPart(player.x + rand(-14, 14), player.y + rand(-14, 14), rand(-60, 60), rand(-60, 60), 0.4, COL.gem, 2);
-    if (odActive === 0) { odFlash = 0.2; SFX.odOff(); }
-  }
+    if (odActive === 0) { odFlash = 0.2; odCool = OD_COOL; SFX.odOff(); }
+  } else if (odCool > 0) odCool = Math.max(0, odCool - dt);
   if (mode === 'tutorial') updateTutorial(dt);
   else updateDirector(dt);
 
@@ -1970,7 +1989,7 @@ function update(dt, raw) {
       updateBoss(e, dt, tx, ty);
     }
     // stasis field slows nearby enemies; overdrive slows everything
-    let sf = odActive > 0 ? 0.4 : 1;
+    let sf = odActive > 0 ? 0.72 : 1;
     if (stasS > 0 && dist2(e.x, e.y, player.x, player.y) < 170 * 170) sf = Math.min(sf, 1 - stasS);
     e.x = clamp(e.x + e.vx * dt * sf, arena.x0 + e.r, arena.x1 - e.r);
     e.y = clamp(e.y + e.vy * dt * sf, arena.y0 + e.r, arena.y1 - e.r);
@@ -1986,7 +2005,8 @@ function update(dt, raw) {
         e.hp -= b.dmg;
         e.flash = 0.08;
         e.vx += b.vx * 0.045; e.vy += b.vy * 0.045;
-        chargeOverdrive(1.1 * b.dmg);
+        // bosses charge OD at a reduced rate so they can't fund the ultimate that kills them
+        chargeOverdrive(0.38 * b.dmg * (e.type === 'boss' ? 0.45 : 1));
         addPart(b.x, b.y, -b.vx * 0.1 + rand(-60, 60), -b.vy * 0.1 + rand(-60, 60), 0.22, e.color, 2);
         if (e.hp <= 0) { killEnemy(e); break; }
         else SFX.hit();
@@ -2014,7 +2034,7 @@ function update(dt, raw) {
     const b = ebullets[i];
     if (!b) continue; // playerDie() can clear the array mid-loop
     b.life -= dt;
-    let bf = odActive > 0 ? 0.4 : 1;
+    let bf = odActive > 0 ? 0.72 : 1;
     if (stasB > 0 && dist2(b.x, b.y, player.x, player.y) < 170 * 170) bf = Math.min(bf, 1 - stasB);
     b.x += b.vx * dt * bf; b.y += b.vy * dt * bf;
     if (b.life <= 0 || b.x < arena.x0 || b.x > arena.x1 || b.y < arena.y0 || b.y > arena.y1) { ebullets.splice(i, 1); continue; }
@@ -2048,7 +2068,7 @@ function update(dt, raw) {
       gemStreak++; gemStreakT = 0.9;
       xp++;
       while (xp >= xpNeed) { xp -= xpNeed; level++; pendingLevels++; xpFlash = 1; xpShown = 0; xpNeed = Math.round(10 + (level - 1) * 9 + (level - 1) * (level - 1) * 0.6); }
-      chargeOverdrive(2.5);
+      chargeOverdrive(0.9);
       if (player.up.nova && Math.random() < 0.10 * player.up.nova) fireNova(player.x, player.y);
       SFX.gem(gemStreak);
       addPart(g.x, g.y, rand(-50, 50), rand(-50, 50), 0.25, COL.gem, 2);
@@ -2725,7 +2745,7 @@ function draw(now) {
       ctx.lineWidth = 6;
       ctx.beginPath(); ctx.arc(ob.x, ob.y, ob.r, 0, TAU); ctx.stroke();
       // fill arc
-      ctx.strokeStyle = odActive > 0 ? '#fff2a8' : ready ? COL.gem : 'rgba(63,240,255,0.7)';
+      ctx.strokeStyle = odActive > 0 ? '#fff2a8' : ready ? COL.gem : odCool > 0 ? 'rgba(255,120,90,0.7)' : 'rgba(63,240,255,0.7)';
       ctx.lineWidth = 6; ctx.lineCap = 'round';
       if (ready || odActive > 0) { ctx.shadowColor = odActive > 0 ? '#ffe86b' : COL.gem; ctx.shadowBlur = 12 + pulse * 12; }
       ctx.beginPath(); ctx.arc(ob.x, ob.y, ob.r, -Math.PI / 2, -Math.PI / 2 + TAU * clamp(frac, 0, 1)); ctx.stroke();
@@ -2737,8 +2757,8 @@ function draw(now) {
       ctx.font = '800 12px Consolas, monospace';
       ctx.fillText(odActive > 0 ? odActive.toFixed(1) : 'OD', ob.x, ob.y + 1);
       ctx.font = '600 9px Consolas, monospace';
-      ctx.fillStyle = odActive > 0 ? 'rgba(255,242,168,0.8)' : ready ? rgbaFromHex(COL.gem).replace('1)', '0.9)') : 'rgba(150,180,255,0.5)';
-      ctx.fillText(odActive > 0 ? 'ACTIVE' : ready ? (isTouch ? 'TAP!' : 'Q / RMB') : Math.floor(odCharge) + '%', ob.x, ob.y + 15);
+      ctx.fillStyle = odActive > 0 ? 'rgba(255,242,168,0.8)' : ready ? rgbaFromHex(COL.gem).replace('1)', '0.9)') : odCool > 0 ? 'rgba(255,140,110,0.75)' : 'rgba(150,180,255,0.5)';
+      ctx.fillText(odActive > 0 ? 'ACTIVE' : ready ? (isTouch ? 'TAP!' : 'Q / RMB') : odCool > 0 ? 'VENTING' : Math.floor(odCharge) + '%', ob.x, ob.y + 15);
       ctx.restore();
     }
 
