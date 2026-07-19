@@ -619,7 +619,7 @@ let storyIdx = 0, storyT = 0, storyChain = false;
 let tut = null;
 let planetIdx = 0, planet = null;
 let bossPhase = false, victoryT = 0, expandStep = 0, mopUpT = -1;
-let galaxyHover = -1, menuHover = -1, overHover = -1;
+let galaxyHover = -1, menuHover = -1, overHover = -1, pauseHover = -1;
 let conquered = [];
 try { conquered = JSON.parse(localStorage.getItem('neovoid_conquered') || '[]') || []; } catch (_) { conquered = []; }
 let score = 0, best = +(localStorage.getItem('neovoid_best') || 0);
@@ -729,7 +729,7 @@ const BOSS_PACK_SCALE = [1, 0.86, 0.74, 0.64, 0.56];
 const BOSS_LIVE_CAP = 6;
 function liveBosses() { let n = 0; for (const e of enemies) if (e.type === 'boss') n++; return n; }
 // ambient pressure: shorter gaps, more per tick, higher ceiling
-function ambientGap(w) { return Math.max(0.26, 1.9 * Math.pow(0.958, w)); }
+function ambientGap(w) { return Math.max(0.26, 2.25 * Math.pow(0.952, w)); }
 function ambientBatch(w) { return 1 + Math.floor(Math.max(0, w - 24) / 12); }
 // wanderers drift rather than chase — they shouldn't outpace the enemies that do
 const WANDER_SPD = 74;
@@ -1301,7 +1301,7 @@ function updateDirector(dt) {
         const w = dwave();
         spawnT = ambientGap(w) * (bossPhase ? 1.8 : 1);
         // late planets keep the adds coming through the boss fight instead of going quiet
-        const cap = bossPhase ? 7 + planetIdx * 1.5 : Math.min(14 + w * 2.4, 72);
+        const cap = bossPhase ? 7 + planetIdx * 1.5 : Math.min(9 + w * 2.6, 72);
         const batch = ambientBatch(w);
         if (wave >= 1) for (let i = 0; i < batch && enemies.length < cap; i++) ambientSpawn();
       }
@@ -1342,7 +1342,7 @@ function updateDirector(dt) {
     spawnT -= dt;
     if (spawnT <= 0) {
       spawnT = ambientGap(wave);
-      const cap = Math.min(14 + wave * 2.2, 68);
+      const cap = Math.min(9 + wave * 2.4, 68);
       const batch = ambientBatch(wave);
       for (let i = 0; i < batch && enemies.length < cap; i++) ambientSpawn();
     }
@@ -1360,9 +1360,17 @@ function planetWin() {
   ebullets.length = 0;
 }
 
+// wanderers drift instead of chasing, so they outlive everything else and slowly crowd
+// the field out. Hold them to a share of the population rather than letting them stack.
+function wandererRoom() {
+  let n = 0;
+  for (const e of enemies) if (e.type === 'wanderer') n++;
+  return Math.max(0, Math.round(6 + enemies.length * 0.15) - n);
+}
 function ambientSpawn() {
   const w = dwave();
-  const pool = ['chaser', 'chaser', 'wanderer'];
+  const pool = ['chaser', 'chaser'];
+  if (wandererRoom() > 0) pool.push('wanderer');
   if (w >= 3) pool.push('splitter');
   if (w >= 4) pool.push('dodger', 'chaser');
   if (w >= 6) pool.push('splitter', 'dodger');
@@ -1383,7 +1391,7 @@ function burstSpawn() {
   if (room === 0) return;
   if (kind === 0) {
     // ring around player
-    const n = Math.min(4 + Math.round(w * 0.9), 18, room), R = 330;
+    const n = Math.min(3 + Math.round(w * 0.85), 18, room), R = 330;
     for (let i = 0; i < n; i++) {
       const a = (i / n) * TAU;
       const x = clamp(player.x + Math.cos(a) * R, x0 + 30, x1 - 30);
@@ -1391,10 +1399,16 @@ function burstSpawn() {
       spawnEnemy(w >= 4 && i % 3 === 0 ? 'dodger' : 'chaser', x, y);
     }
   } else if (kind === 1) {
-    // wall line of wanderers
-    const n = Math.min(4 + Math.round(w * 0.8), 16, room), top = Math.random() < 0.5;
-    for (let i = 0; i < n; i++)
-      spawnEnemy('wanderer', x0 + (i + 0.5) / n * (x1 - x0), top ? y0 + 40 : y1 - 40);
+    // advancing wall — was solid wanderers, which is what buried THE CORE in squares.
+    // Only the share the field has room for stays a wanderer; the rest push forward.
+    const n = Math.min(3 + Math.round(w * 0.7), 14, room), top = Math.random() < 0.5;
+    let wr = wandererRoom();
+    for (let i = 0; i < n; i++) {
+      let t = 'chaser';
+      if (wr > 0 && i % 2 === 0) { t = 'wanderer'; wr--; }
+      else if (w >= 6 && i % 3 === 1) t = 'dodger';
+      spawnEnemy(t, x0 + (i + 0.5) / n * (x1 - x0), top ? y0 + 40 : y1 - 40);
+    }
   } else {
     // corner splitter pods
     const cs = [[x0 + 50, y0 + 50], [x1 - 50, y0 + 50], [x0 + 50, y1 - 50], [x1 - 50, y1 - 50]];
@@ -3311,10 +3325,23 @@ function draw(now) {
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#eaf6ff';
     ctx.font = '900 40px Consolas, monospace';
-    ctx.fillText('PAUSED', W / 2, H * 0.45);
-    ctx.font = '600 14px Consolas, monospace';
-    ctx.fillStyle = 'rgba(170,200,255,0.7)';
-    ctx.fillText('P — RESUME', W / 2, H * 0.45 + 30);
+    ctx.fillText('PAUSED', W / 2, H * 0.42);
+    const rs = pauseRects();
+    for (let i = 0; i < rs.length; i++) {
+      const r = rs[i], hov = pauseHover === i;
+      ctx.fillStyle = hov ? 'rgba(63,240,255,0.16)' : 'rgba(120,160,255,0.07)';
+      ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.fill();
+      ctx.strokeStyle = hov ? 'rgba(63,240,255,0.9)' : 'rgba(140,175,255,0.35)';
+      ctx.lineWidth = hov ? 2 : 1.5;
+      ctx.beginPath(); ctx.roundRect(r.x, r.y, r.w, r.h, 8); ctx.stroke();
+      ctx.fillStyle = hov ? '#ffffff' : 'rgba(215,232,255,0.85)';
+      ctx.font = '800 15px Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(r.label, r.x + r.w / 2, r.y + r.h / 2 + 5);
+    }
+    ctx.font = '600 12px Consolas, monospace';
+    ctx.fillStyle = 'rgba(170,200,255,0.5)';
+    ctx.fillText(isTouch ? 'TAP A BUTTON' : 'P / ESC — RESUME     H — HOME', W / 2, rs[0].y + rs[0].h + 26);
   }
 
   // touch sticks
@@ -3417,9 +3444,18 @@ addEventListener('keydown', e => {
       if (e.code === 'KeyQ' || e.code === 'KeyE') activateOverdrive();
       return;
     }
-    if (e.code === 'KeyP' || e.code === 'Escape') paused = !paused;
-    if (!paused && (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight')) tryDash();
-    if (!paused && (e.code === 'KeyQ' || e.code === 'KeyE')) activateOverdrive();
+    if (paused) {
+      // ESC stays "resume" here — bailing to the menu abandons the run, so it gets its own key
+      if (e.code === 'KeyP' || e.code === 'Escape') { pauseActivate(0); return; }
+      if (e.code === 'KeyH') { pauseActivate(1); return; }
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') { pauseHover = 0; return; }
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') { pauseHover = 1; return; }
+      if (e.code === 'Enter') { pauseActivate(pauseHover < 0 ? 0 : pauseHover); return; }
+      return;
+    }
+    if (e.code === 'KeyP' || e.code === 'Escape') { paused = true; pauseHover = -1; return; }
+    if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') tryDash();
+    if (e.code === 'KeyQ' || e.code === 'KeyE') activateOverdrive();
   }
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
@@ -3429,6 +3465,27 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 function firstTarget() {
   for (let i = 0; i < PLANETS.length; i++) if (!conquered[i]) return i;
   return PLANETS.length - 1;
+}
+// pause overlay: resume, or bail out to the menu (abandons the run)
+function pauseRects() {
+  const w = 210, h = 46, gap = 18, y = H * 0.52;
+  return [
+    { x: W / 2 - w - gap / 2, y, w, h, label: 'RESUME' },
+    { x: W / 2 + gap / 2, y, w, h, label: 'HOME' },
+  ];
+}
+function pauseActivate(i) {
+  paused = false;
+  pauseHover = -1;
+  if (i === 1) { state = S_MENU; menuHover = 0; setArena(1, true); }
+}
+function pausePress(x, y) {
+  const rs = pauseRects();
+  for (let i = 0; i < rs.length; i++) {
+    const r = rs[i];
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { pauseActivate(i); return true; }
+  }
+  return false;
 }
 // death screen: retry/continue on the left, always a way home on the right
 function overRects() {
@@ -3503,6 +3560,7 @@ canvas.addEventListener('pointerdown', e => {
   initAudio();
   mouse.x = e.clientX; mouse.y = e.clientY;
   if (state !== S_PLAY) { uiPress(e.clientX, e.clientY); return; }
+  if (paused) { pausePress(e.clientX, e.clientY); return; } // paused keeps state S_PLAY
   if (choice) {
     const rs = cardRects(choice.length);
     for (let i = 0; i < rs.length; i++) {
@@ -3537,6 +3595,13 @@ addEventListener('pointermove', e => {
       const r = rs[i];
       if (mouse.x >= r.x && mouse.x <= r.x + r.w && mouse.y >= r.y && mouse.y <= r.y + r.h) overHover = i;
     }
+  } else if (state === S_PLAY && paused) {
+    pauseHover = -1;
+    const rs = pauseRects();
+    for (let i = 0; i < rs.length; i++) {
+      const r = rs[i];
+      if (mouse.x >= r.x && mouse.x <= r.x + r.w && mouse.y >= r.y && mouse.y <= r.y + r.h) pauseHover = i;
+    }
   }
   if (choice) {
     choiceHover = -1;
@@ -3562,6 +3627,11 @@ canvas.addEventListener('touchstart', e => {
   if (state !== S_PLAY) {
     const t0 = e.changedTouches[0];
     if (t0) uiPress(t0.clientX, t0.clientY);
+    return;
+  }
+  if (paused) {
+    const t0 = e.changedTouches[0];
+    if (t0) pausePress(t0.clientX, t0.clientY);
     return;
   }
   if (choice) {
