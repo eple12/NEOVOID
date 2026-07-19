@@ -2419,9 +2419,14 @@ function drawStoryScene(p, t, now) {
     const cols = ['#58ff9b', '#ff9f43', '#a06bff', '#ffe86b', '#ff5ce1', '#3ff0ff', '#ff6b6b', '#ffffff'];
     ctx.strokeStyle = 'rgba(150,180,255,0.3)'; ctx.lineWidth = 1.5;
     ctx.setLineDash([4, 7]); ctx.beginPath();
+    // The old spiral ran all 8 worlds inward on one curve, which bunched the last two:
+    // #6 and the ringed CORE ended up 25px apart when they need 49, so they visibly
+    // overlapped. THE CORE now sits at the heart and the seven worlds ring around it —
+    // min clearance 40px, and it reads more like a galaxy map besides.
     const pts = cols.map((c, i) => {
-      const a = 4.0 * (1 - i / 7) + 0.7, rr = (1 - i / 7) * 150 + 30;
-      return [cx + Math.cos(a) * rr * 1.3, cy + Math.sin(a) * rr * 0.75];
+      if (i === 7) return [cx, cy];
+      const a = 5.2 * (1 - i / 6) + 0.9, rr = (1 - i / 6) * 80 + 110;
+      return [cx + Math.cos(a) * rr * 1.4, cy + Math.sin(a) * rr * 0.68];
     });
     pts.forEach((pt, i) => i ? ctx.lineTo(pt[0], pt[1]) : ctx.moveTo(pt[0], pt[1]));
     ctx.stroke(); ctx.setLineDash([]);
@@ -2503,10 +2508,10 @@ function drawStory(now) {
     const caret = (i === revealed.length - 1 && shown < full.length && Math.sin(now * 0.012) > 0) ? '▌' : '';
     ctx.fillText(line + caret, W / 2, boxY + 40 + i * 32);
   }
-  // progress dots
-  for (let i = 0; i < STORY.length; i++) {
+  // progress dots — count the deck being played, not always STORY
+  for (let i = 0; i < storyDeck.length; i++) {
     ctx.fillStyle = i === storyIdx ? p.color : 'rgba(255,255,255,0.22)';
-    ctx.beginPath(); ctx.arc(W / 2 + (i - (STORY.length - 1) / 2) * 16, H - 52, 3, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(W / 2 + (i - (storyDeck.length - 1) / 2) * 16, H - 52, 3, 0, TAU); ctx.fill();
   }
   const doneTyping = shown >= full.length;
   ctx.globalAlpha = 0.6 + 0.4 * Math.sin(now * 0.005);
@@ -2525,7 +2530,7 @@ function drawStory(now) {
   ctx.fillStyle = 'rgba(143,251,255,0.5)';
   ctx.font = '700 12px Consolas, monospace';
   try { ctx.letterSpacing = '4px'; } catch (_) {}
-  ctx.fillText('PROLOGUE', 30, 36);
+  ctx.fillText(storyDeck === ENDING ? 'EPILOGUE' : 'PROLOGUE', 30, 36);
   try { ctx.letterSpacing = '0px'; } catch (_) {}
 }
 function drawTutorialOverlay(now) {
