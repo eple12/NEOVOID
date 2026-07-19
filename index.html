@@ -725,9 +725,45 @@ function campaignBossMul() { return mode === 'campaign' ? 1 + planetIdx * 0.22 :
 function bossEvery(w) { return w >= 38 ? 2 : w >= 26 ? 3 : w >= 15 ? 4 : 5; }
 function bossCount(w) { return Math.min(5, 1 + Math.floor(Math.max(0, w - 11) / 8)); }
 const BOSS_PACK_SCALE = [1, 0.86, 0.74, 0.64, 0.56];
-// packs arriving faster than you clear them would pile into soup — hold the field at 6
-const BOSS_LIVE_CAP = 6;
 function liveBosses() { let n = 0; for (const e of enemies) if (e.type === 'boss') n++; return n; }
+
+// A boss encounter is fought in stages: one boss to open, then pairs. The next stage only
+// arrives once the current one is dead, so you never face more than two at a time.
+const BOSS_STAGE_MAX = 2;
+let bossQueue = [], bossStageT = 0, bossEncounterScale = 1, bossStageNo = 0, bossStageTotal = 0;
+function bossStages(defs) {
+  const rest = defs.slice(), stages = [];
+  if (rest.length) stages.push([rest.shift()]); // the opener is always a single boss
+  while (rest.length) stages.push(rest.splice(0, BOSS_STAGE_MAX));
+  return stages;
+}
+// Scale off the whole encounter, not the stage. Staged fights are much slower per point of
+// hp than simultaneous ones — pierce, orbitals and chain no longer splash across the pack —
+// so a multi-stage encounter gets a discount, or THE CORE turns into a 20-minute slog.
+// Single-stage planets are untouched; totals still escalate (1 -> 1.11 -> 1.33 boss-units).
+function startBossEncounter(defs, delay) {
+  bossQueue = bossStages(defs);
+  const stages = bossQueue.length;
+  bossEncounterScale = BOSS_PACK_SCALE[Math.min(defs.length, 5) - 1] / (1 + (stages - 1) * 0.55);
+  bossStageNo = 0;
+  bossStageTotal = stages;
+  bossStageT = delay || 0;
+}
+function spawnBossStage(subFor) {
+  const stage = bossQueue.shift();
+  if (!stage) return;
+  bossStageNo++;
+  const names = stage.map(d => d.name).join(' + ');
+  banner = {
+    txt: names + (stage.length > 1 ? ' AWAKEN' : ' AWAKENS'),
+    sub: bossStageTotal > 1 ? 'wave ' + bossStageNo + ' of ' + bossStageTotal + ' — ' + subFor : subFor,
+    t: 2.4, max: 2.4, color: stage[0].color,
+  };
+  SFX.boss();
+  for (const d of stage) { const p = edgeSpawnPos(); spawnBoss(d, p.x, p.y, bossEncounterScale); }
+  bossStageT = 1.8; // breather before the next stage, counted once this one is dead
+}
+function bossEncounterBusy() { return bossQueue.length > 0 || liveBosses() > 0; }
 // ambient pressure: shorter gaps, more per tick, higher ceiling
 function ambientGap(w) { return Math.max(0.26, 2.25 * Math.pow(0.952, w)); }
 function ambientBatch(w) { return 1 + Math.floor(Math.max(0, w - 24) / 12); }
@@ -812,6 +848,7 @@ function startTutorial(fromIntro) {
   mode = 'tutorial';
   planet = null; planetIdx = 0;
   bossPhase = false; victoryT = 0; expandStep = 0; mopUpT = -1;
+  bossQueue = []; bossStageT = 0; bossStageNo = 0; bossStageTotal = 0;
   setArena(0.9, true);
   score = 0; mult = 1; lives = 3; wave = 0; waveT = 999; spawnT = 999; gameT = 0;
   level = 1; xp = 0; xpNeed = 8; pendingLevels = 0; xpShown = 0; xpFlash = 0;
@@ -1267,16 +1304,8 @@ function updateDirector(dt) {
         wave++;
         if (wave > planet.waves) {
           bossPhase = true;
-          const list = planet.boss;
-          const hpS = BOSS_PACK_SCALE[list.length - 1] || BOSS_PACK_SCALE[4];
-          const names = list.map(v => BOSSES.find(b => b.v === v).name).join(' + ');
-          banner = { txt: names + (list.length > 1 ? ' AWAKEN' : ' AWAKENS'), sub: 'destroy to conquer ' + planet.name, t: 2.4, max: 2.4, color: planet.color };
-          SFX.boss();
-          for (const v of list) {
-            const def = BOSSES.find(b => b.v === v);
-            const p = edgeSpawnPos();
-            spawnBoss(def, p.x, p.y, hpS);
-          }
+          startBossEncounter(planet.boss.map(v => BOSSES.find(b => b.v === v)), 0);
+          spawnBossStage('destroy to conquer ' + planet.name);
         } else {
           waveT = 24;
           banner = { txt: 'WAVE ' + wave + ' / ' + planet.waves, sub: null, t: 1.6, max: 1.6, color: planet.color };
@@ -1285,10 +1314,14 @@ function updateDirector(dt) {
         }
       }
     } else {
-      // boss phase
-      const bossAlive = enemies.some(e => e.type === 'boss');
+      // boss phase — stages arrive one at a time, each only after the last is cleared
+      const bossAlive = liveBosses() > 0;
       if (bossAlive) {
         mopUpT = 3.2; // keeps refreshing while any boss lives
+      } else if (bossQueue.length) {
+        bossStageT -= dt; // breather between stages
+        mopUpT = 3.2;
+        if (bossStageT <= 0) spawnBossStage('destroy to conquer ' + planet.name);
       } else {
         mopUpT -= dt; // last boss fell — brief mop-up window, then spawning halts
         if (enemies.length === 0) { planetWin(); return; }
@@ -1312,19 +1345,14 @@ function updateDirector(dt) {
     if (waveT <= 0) {
       wave++;
       waveT = Math.max(16, 26 - wave * 0.25);
-      if (wave % bossEvery(wave) === 0 && liveBosses() < BOSS_LIVE_CAP) {
-        // walk the shuffled order so a pack is always distinct bosses, never dupes
-        const n = Math.min(bossCount(wave), BOSS_LIVE_CAP - liveBosses()), defs = [];
+      // a new encounter only starts once the previous one is fully cleared
+      if (wave % bossEvery(wave) === 0 && !bossEncounterBusy()) {
+        // walk the shuffled order so an encounter is always distinct bosses, never dupes
+        const n = bossCount(wave), defs = [];
         for (let i = 0; i < n; i++) defs.push(BOSSES[bossOrder[(bossIdx + i) % BOSSES.length]]);
         bossIdx += n;
-        const scale = BOSS_PACK_SCALE[n - 1];
-        banner = {
-          txt: defs.map(d => d.name).join(' + ') + ' DETECTED',
-          sub: n > 1 ? 'destroy all ' + n + ' cores' : 'destroy the core',
-          t: 2.4, max: 2.4, color: defs[0].color,
-        };
-        SFX.boss();
-        for (const d of defs) { const p = edgeSpawnPos(); spawnBoss(d, p.x, p.y, scale); }
+        startBossEncounter(defs, 0);
+        spawnBossStage('destroy the core');
       } else {
         banner = { txt: 'WAVE ' + wave, sub: null, t: 1.6, max: 1.6, color: COL.player };
         if (wave > 1) SFX.wave();
@@ -1338,6 +1366,11 @@ function updateDirector(dt) {
         shockGrid(arenaCX(), arenaCY(), Math.max(W, H) * 0.6, 500);
         SFX.expand();
       }
+    }
+    // mid-encounter: next stage waits for the current one to be wiped out
+    if (bossQueue.length && liveBosses() === 0) {
+      bossStageT -= dt;
+      if (bossStageT <= 0) spawnBossStage('destroy the core');
     }
     spawnT -= dt;
     if (spawnT <= 0) {
@@ -1666,6 +1699,7 @@ function startGame(m, pIdx) {
   planetIdx = pIdx || 0;
   planet = mode === 'campaign' ? PLANETS[planetIdx] : null;
   bossPhase = false; victoryT = 0; expandStep = 0; mopUpT = -1;
+  bossQueue = []; bossStageT = 0; bossStageNo = 0; bossStageTotal = 0;
   setArena(mode === 'campaign' ? planet.size : 0.72, true);
   score = 0; mult = 1; lives = 3; nextLifeAt = 20000;
   wave = 0; waveT = mode === 'campaign' ? 3 : 0.01; spawnT = 2.2; gameT = 0;
